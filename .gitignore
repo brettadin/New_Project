@@ -77,8 +77,7 @@ datasets/
 data/
 raw_data/
 research_data/
-sample_data/
-test_data/
+
 
 # --- Large scientific data formats (do not enter Git) ---
 *.fits
@@ -92,11 +91,6 @@ output/
 results/
 plots/
 exports/
-*.png
-*.jpg
-*.jpeg
-*.svg
-*.pdf
 *.h5
 *.hdf5
 *.npz
