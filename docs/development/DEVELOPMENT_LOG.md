@@ -72,8 +72,8 @@ Chronological record of development activity. Maintained continuously as work pr
 - Stage 2 readiness: Pending D5 technology approval (DEC-006). Kepler-10b file inspection resolved; empirical UQ-009 calibration is a Stage 2 validation activity, not an entry blocker.
 
 **Next steps:**
-- User review and approval of D5 technology stack (DEC-006)
-- Begin Stage 2 implementation after D5 approval
+- Begin Stage 2 implementation with Task 2.1 (project lifecycle)
+- Install Python packages: PySide6, NumPy, SciPy, Astropy, Matplotlib, pytest
 - Empirical UQ-009 calibration during Stage 2 validation activity (not an entry blocker)
 
-**Status:** Stage 1 research complete. Stage 2 pending D5 technology approval (DEC-006).
+**Status:** Stage 1 research complete. Stage 2 ready to begin (D5 approved with delegation; PySide6 selected by OpenCode).

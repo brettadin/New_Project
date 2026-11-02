@@ -22,7 +22,7 @@ Per §13.1.2:
 | ID | Question | Classification | Affected Decision/Capability | Revisit Condition | Status |
 |---|---|---|---|---|---|
 | UQ-001 | Which initial platform best satisfies local data access, offline use, computation, and future hybrid deployment? | Blocking | D1 (platform), Stage 2 | T1 research complete (REVIEW-003); DEC-004 Approved (desktop-first) | Resolved (D1 Approved) |
-| UQ-002 | What runtime/language strategy supports required scientific computing without duplicating mature libraries? | Deferred | D5 (stack) | After D1 approval | Open |
+| UQ-002 | What runtime/language strategy supports required scientific computing without duplicating mature libraries? | Resolved | D5 (stack) | D5 approved with delegation (DEC-006); Python 3.13 + PySide6 selected by OpenCode | Resolved (D5 Approved) |
 | UQ-003 | What data model represents objects, observations, datasets, derived products, operations, and relationships without premature complexity? | Important | D6 (storage), Stage 3 | Stage 1 research complete; provisional local-file approach approved | Open (D6 formal deferred) |
 | UQ-004 | Which external archives/APIs are feasible, licensed, and stable enough for Stage 7 integration? | Deferred | D7 (external resources) | Stage 1 evaluation | Open |
 | UQ-005 | What is the project licence and distribution model? | Important | D10 (licence) | Before Stage 7 | Open |
@@ -33,4 +33,4 @@ Per §13.1.2:
 
 ## Linkage
 
-This register is linked to `docs/MASTER_DEVELOPMENT_ROADMAP.md` per §13.1.5. Blocking questions (e.g., UQ-008) prevent progression to dependent stages. UQ-001, UQ-007, and UQ-008 are resolved; UQ-009 remains partially resolved (empirical calibration pending Stage 2 validation activity, not an entry blocker).
+This register is linked to `docs/MASTER_DEVELOPMENT_ROADMAP.md` per §13.1.5. Blocking questions (e.g., UQ-008) prevent progression to dependent stages. UQ-001, UQ-002, UQ-007, and UQ-008 are resolved; UQ-009 remains partially resolved (empirical calibration pending Stage 2 validation activity, not an entry blocker).

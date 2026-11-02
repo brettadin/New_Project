@@ -61,22 +61,22 @@ These are separate decisions:
 
 | Criterion | PySide6 | PyQt6 |
 |---|---|---|
-| **Licensing** | LGPLv3 | GPLv3 or commercial |
-| **Distribution** | More permissive; can distribute without opening source | GPL requires derivative works to be GPL; commercial license available |
+| **Licensing** | LGPL/GPL dual licensing | GPLv3 or commercial |
+| **Distribution** | LGPL permits linking without requiring application to be LGPL | GPL requires derivative works to be GPL; commercial license available |
 | **Backend** | Qt Company-backed | Riverbank Computing-backed |
 | **Python compatibility** | Python 3.8+ | Python 3.8+ |
 | **Scientific library integration** | Native; compatible with NumPy, SciPy, Astropy, Matplotlib | Native; compatible with NumPy, SciPy, Astropy, Matplotlib |
-| **Matplotlib integration** | Qt6Agg backend | Qt6Agg backend |
+| **Matplotlib integration** | QtAgg backend | QtAgg backend |
 | **Documentation** | Official Qt docs + PySide6 docs | Official Qt docs + PyQt6 docs |
 | **Packaging** | PyInstaller, cx_Freeze, Nuitka | PyInstaller, cx_Freeze, Nuitka |
 
 ### Licensing considerations
 
-PySide6 is distributed under LGPLv3, which permits linking without requiring the application to be LGPL. PyQt6 is distributed under GPLv3 (which requires derivative works to be GPL) or a commercial license. Licensing considerations are relevant to possible future distribution of the application.
+PySide6 is distributed under both LGPL and GPL licenses, giving flexibility for distribution. PyQt6 is distributed under GPLv3 (which requires derivative works to be GPL) or a commercial license. Licensing considerations are relevant to possible future distribution of the application.
 
 ### Matplotlib backend note
 
-When discussing Qt integration with Matplotlib, use the Qt6Agg backend (not Qt5Agg) for Qt6-based applications.
+When discussing Qt integration with Matplotlib, use the QtAgg backend (not Qt5Agg) for Qt6-based applications.
 
 ### Assumptions
 

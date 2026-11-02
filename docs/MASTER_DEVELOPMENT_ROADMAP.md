@@ -16,6 +16,7 @@ Single authoritative source for overall development planning and progress (§10.
 | D2 | First scientific capability: photometry and time-series analysis | Approved | §3.4, §2.2 |
 | D3 | Initial scope boundary: four categories (included / deferred / architectural consideration now / outside scope) | Approved | §12.5, §10.4.2 |
 | D4 | Initial deployment: single-user local, private-by-default projects, permission-aware data model; multi-user deferred | Approved | §8.11, §9.1.2, §9.8.2 |
+| D5 | Technology stack: Python 3.13 primary language; PySide6 desktop UI; NumPy/SciPy/Astropy/Matplotlib scientific stack; pytest; venv | Approved (delegated to OpenCode) | §9.1.9, §12.3, §10.4.2 |
 
 ## Decisions Requiring Research Before Approval
 
@@ -27,7 +28,6 @@ Single authoritative source for overall development planning and progress (§10.
 
 | ID | Decision | Status | Deferred Until | Basis |
 |---|---|---|---|---|
-| D5 | Technology stack and architecture | Deferred | Stage 1 research | §12.3, §9.1.9 |
 | D6 | Data storage model | Provisional local-file approach permitted for the first vertical slice only; subject to documented limitations and preservation of original data; does not constitute approval of a formal storage architecture; formal D6 decision deferred | After first vertical slice | §9.4, §10.4.1, §10.4.2 |
 | D7 | External resources for first integration | Deferred | Stage 1 evaluation | §12.4.11 |
 | D9 | Application name and acronym | Deferred | After scope approval | §1.1.3–1.1.4 |
@@ -70,7 +70,7 @@ Single authoritative source for overall development planning and progress (§10.
 | S4 | Metadata, units, time systems, coordinate conventions required? | Stage 2 | Blocking | Complete (REVIEW-002; file inspected) |
 | S7 | Complete research workflow from discovery to recorded result? | Stage 2 | Blocking | Complete (REVIEW-001, REVIEW-002) |
 | T1 | Initial platform vs §9.1.9 criteria? | D1, Stage 2 | Blocking | Complete (REVIEW-003) |
-| T2 | Runtime/language strategy for scientific computing? | D5 | Deferred | Open |
+| T2 | Runtime/language strategy for scientific computing? | D5 | Approved | Complete (DEC-006: Python 3.13 + PySide6 + scientific stack) |
 | T3–T12 | Other technical questions | Various | Deferred | Open |
 
 ## Known Risks and Blockers
