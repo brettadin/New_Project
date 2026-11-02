@@ -46,7 +46,7 @@ Single authoritative source for overall development planning and progress (§10.
 |---|---|---|---|---|
 | **0. Documentation & decision baseline** | README index, roadmap, development log, templates, decision records (D2–D4), project identity record, unresolved-questions register, Git init | Approved / Complete | User approval of D2–D4 | `docs/README.md`, roadmap, log, templates, decision records, identity register, unresolved-questions register |
 | **1. Targeted research** | T1 platform evaluation vs §9.1.9 criteria; BLS vs Lomb–Scargle comparison; Kepler-10b dataset profile; D1 and BLS operation decision records prepared | Complete (research/documentation only) | Stage 0 complete | Research records (`docs/science/`, `docs/technical/`), D1 decision record (DEC-004, Approved), BLS operation decision record (DEC-005, Approved), .gitignore |
-| **2. First useful scientific vertical slice** | Project create/open/save; import one light-curve dataset; preserve original + provenance; table + light-curve visualization; one photometric operation (BLS) with uncertainty; record operation and parameters | Pending | Stage 1 complete; D1 approval (obtained); BLS operation approval (obtained); S1–S4, S7 research; Kepler-10b file inspection (evidence gap) | End-to-end reproducible light-curve analysis on real data |
+| **2. First useful scientific vertical slice** | Project create/open/save; import one light-curve dataset; preserve original + provenance; table + light-curve visualization; one photometric operation (BLS) with uncertainty; record operation and parameters | Pending | Stage 1 complete; D1 approval (obtained); BLS operation approval (obtained); S1–S4, S7 research; Kepler-10b file inspection (resolved) | End-to-end reproducible light-curve analysis on real data |
 | **3. Reproducibility (user-facing)** | Analysis-record inspection, replay, portable analysis packages, project export/import | Pending | Stages 2 | Reproducible investigations |
 | **4. First external integration** | One archive, metadata-first retrieval, caching, licence/auth (D10 must be approved first) | Pending | Stage 3; D10 approval | Retrieval of real archive data |
 | **5. Contextual education slice** | Method explanations attached to the capability | Pending | Stage 2 | In-context learning support |
@@ -66,8 +66,8 @@ Single authoritative source for overall development planning and progress (§10.
 |---|---|---|---|---|
 | S1 | Which photometric/time-series methods are scientifically appropriate? | Stage 2 (analytical operation) | Blocking | Complete (REVIEW-001) |
 | S2 | Uncertainty, bias, and failure modes of each method? | Stage 2 | Blocking | Complete (REVIEW-001) |
-| S3 | Benchmark datasets and published results for validation? | Stage 2 | Blocking | Complete (REVIEW-002, pending file inspection) |
-| S4 | Metadata, units, time systems, coordinate conventions required? | Stage 2 | Blocking | Complete (REVIEW-002, pending file inspection) |
+| S3 | Benchmark datasets and published results for validation? | Stage 2 | Blocking | Complete (REVIEW-002; file inspected) |
+| S4 | Metadata, units, time systems, coordinate conventions required? | Stage 2 | Blocking | Complete (REVIEW-002; file inspected) |
 | S7 | Complete research workflow from discovery to recorded result? | Stage 2 | Blocking | Complete (REVIEW-001, REVIEW-002) |
 | T1 | Initial platform vs §9.1.9 criteria? | D1, Stage 2 | Blocking | Complete (REVIEW-003) |
 | T2 | Runtime/language strategy for scientific computing? | D5 | Deferred | Open |
@@ -79,8 +79,9 @@ Single authoritative source for overall development planning and progress (§10.
 |---|---|---|---|
 | R1 | D1 platform approved (desktop-first) | Resolved | DEC-004 Approved |
 | R2 | BLS operation approved | Resolved | DEC-005 Approved |
-| R3 | Kepler-10b FITS file not inspected | Blocks Stage 2 import/validation | Retry MAST download or select alternative dataset |
+| R3 | Kepler-10b FITS file inspected (Q0 quarter) | Resolved | File downloaded from STScI archive; header and light-curve table verified |
 | R4 | Storage architecture not finalized (D6 deferred) | Low for first slice | Provisional local-file approach with documented limitations |
+| R5 | D5 technology stack approved with delegation | Resolved | DEC-006 Approved; OpenCode selects specific frameworks |
 
 ## Consultation Requirements
 

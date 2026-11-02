@@ -27,11 +27,11 @@ Which initial platform strategy best satisfies Foundation §9.1.9 criteria for t
 
 **D1 (Platform Strategy):** Where does computation run? Where is data stored? How is it accessed? Desktop-first vs browser-first vs local-first web.
 
-**D5 (Technology Stack):** Which specific languages, frameworks, libraries? Python vs JS/Rust. Electron vs Tauri vs Wails.
+**D5 (Technology Stack):** Which specific languages, frameworks, libraries? Python vs JS/Rust. PySide6 vs PyQt6 vs other UI frameworks.
 
-These were previously conflated. They are separate decisions:
-- D1: Platform strategy (desktop-first recommended)
-- D5: Technology stack (deferred — no stack selected)
+These are separate decisions:
+- D1: Platform strategy (desktop-first — approved)
+- D5: Technology stack (Python approved as primary language; UI framework selection delegated to OpenCode)
 
 ### Platform strategy evaluation against §9.1.9 criteria
 
@@ -48,23 +48,40 @@ These were previously conflated. They are separate decisions:
 | 9. Cost/infrastructure | Strong — no hosting costs | Moderate — hosting required | Strong — no hosting |
 | 10. Expansion/maintainability | Strong — modular, maintained libraries | Moderate — tied to web ecosystem | Moderate — emerging standards |
 
-### Browser-based computing correction
-
-Previous claim that browser-based scientific computing is "weak" was overstated. WebAssembly (WASM) with Pyodide enables CPython with NumPy, SciPy, pandas in the browser. Performance near-native for NumPy (1–16x slower for pure Python). However: JIT-compiled libraries (JAX, PyMC) lack WASM support; browser memory/storage APIs have cross-browser inconsistencies; large astronomical dataset handling in-browser unproven at scale. Browser computing is viable for some workloads but not categorically equivalent to native for all scientific requirements.
-
 ### Integration complexity
 
 | Architecture | Integration requirements | Additional complexity |
 |---|---|---|
 | Desktop-first, Python backend | Python runtime, scientific libraries, GUI framework | Packaging, dependency management, environment distribution |
-| Desktop-first, web-tech UI (Electron/Tauri/Wails) | Desktop framework + backend communication layer | IPC between UI and backend, two codebases |
+| Desktop-first, Python + Qt UI | Python backend + Qt bindings (PySide6 or PyQt6) | Packaging Qt dependencies; Qt licensing considerations |
 | Browser-first, WASM Python (Pyodide) | WASM runtime, Pyodide distribution, browser APIs | WASM binary size, browser compatibility, limited library support |
 | Local-first web | Browser storage APIs, service workers | Cross-browser API inconsistencies, storage quota, offline sync |
+
+### Python UI framework comparison (PySide6 vs PyQt6)
+
+| Criterion | PySide6 | PyQt6 |
+|---|---|---|
+| **Licensing** | LGPLv3 | GPLv3 or commercial |
+| **Distribution** | More permissive; can distribute without opening source | GPL requires derivative works to be GPL; commercial license available |
+| **Backend** | Qt Company-backed | Riverbank Computing-backed |
+| **Python compatibility** | Python 3.8+ | Python 3.8+ |
+| **Scientific library integration** | Native; compatible with NumPy, SciPy, Astropy, Matplotlib | Native; compatible with NumPy, SciPy, Astropy, Matplotlib |
+| **Matplotlib integration** | Qt6Agg backend | Qt6Agg backend |
+| **Documentation** | Official Qt docs + PySide6 docs | Official Qt docs + PyQt6 docs |
+| **Packaging** | PyInstaller, cx_Freeze, Nuitka | PyInstaller, cx_Freeze, Nuitka |
+
+### Licensing considerations
+
+PySide6 is distributed under LGPLv3, which permits linking without requiring the application to be LGPL. PyQt6 is distributed under GPLv3 (which requires derivative works to be GPL) or a commercial license. Licensing considerations are relevant to possible future distribution of the application.
+
+### Matplotlib backend note
+
+When discussing Qt integration with Matplotlib, use the Qt6Agg backend (not Qt5Agg) for Qt6-based applications.
 
 ### Assumptions
 
 - Desktop-first preserves hybrid path per §9.1.2 (scientific logic in Python can be exposed via API to future web platform)
-- No specific framework selected (D5 deferred)
+- Python is the primary language; UI framework selection delegated to OpenCode
 
 ### Limitations
 
@@ -77,12 +94,11 @@ Previous claim that browser-based scientific computing is "weak" was overstated.
 
 | Question | Why unresolved | Revisit condition |
 |---|---|---|
-| D1 platform strategy approval | Requires user decision | User reviews and approves D1 decision record |
-| D5 technology stack selection | Deferred per user direction | After D1 approval |
+| D5 UI framework selection | Delegated to OpenCode | OpenCode selection during Stage 2 implementation |
 
 ## Recommendation
 
-Desktop-first platform strategy as leading recommendation for D1. Satisfies §9.1.9 criteria for scientific computing, local file access, offline use, and hybrid path. D5 technology stack remains separate and deferred. No stack (Python, Electron, Tauri, Wails) selected as part of D1.
+Desktop-first platform strategy as the foundation for D1. D5 technology stack: Python approved as primary language; UI framework selection delegated to OpenCode with PySide6 as a recommended candidate (not mandatory).
 
 ## Related Records
 

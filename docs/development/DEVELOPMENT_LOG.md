@@ -69,11 +69,11 @@ Chronological record of development activity. Maintained continuously as work pr
 
 **Distinction — Stage 1 complete vs Stage 2 ready:**
 - Stage 1 research/documentation: Complete. All research records and decision records exist.
-- Stage 2 readiness: Not yet ready. Kepler-10b file inspection (UQ-008) remains an open evidence gap that blocks Stage 2 import and validation work.
+- Stage 2 readiness: Pending D5 technology approval (DEC-006). Kepler-10b file inspection resolved; empirical UQ-009 calibration is a Stage 2 validation activity, not an entry blocker.
 
 **Next steps:**
-- Resolve Kepler-10b file inspection evidence gap (UQ-008)
-- Address validation tolerances question (UQ-009)
-- Begin Stage 2 only after evidence gap resolved
+- User review and approval of D5 technology stack (DEC-006)
+- Begin Stage 2 implementation after D5 approval
+- Empirical UQ-009 calibration during Stage 2 validation activity (not an entry blocker)
 
-**Status:** Stage 1 research complete. Stage 2 not yet ready (Kepler-10b file inspection pending).
+**Status:** Stage 1 research complete. Stage 2 pending D5 technology approval (DEC-006).

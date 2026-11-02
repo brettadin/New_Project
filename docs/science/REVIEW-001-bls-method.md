@@ -75,25 +75,24 @@ Which photometric/time-series analytical operation is most suitable as the initi
 
 - BLS implementation in Astropy is scientifically sound (unverified - depends on library quality)
 - Kepler-10b published period is reliable reference (verified - from NASA Exoplanet Archive)
-- Per-point uncertainties in Kepler PDCSAP_FLUX_ERR are usable (unverified - requires file inspection)
+- Per-point uncertainties in Kepler PDCSAP_FLUX_ERR are usable (verified - from actual file inspection)
 
 ## Limitations
 
-- No actual Kepler FITS file inspected (file download from MAST failed)
+- Quarter 0 baseline (~9.7 days) is shorter than regular quarters (~90 days); limits period precision and broader period search
 - BLS not yet implemented or tested
-- Validation tolerances not yet established
+- Validation tolerances not yet established (empirical calibration required during Stage 2)
 
 ## Unresolved Questions
 
 | Question | Why unresolved | Revisit condition |
 |---|---|---|
-| Actual Kepler-10b FITS file structure not verified | MAST download API returned errors | Successful file download and inspection |
 | BLS implementation details for the application | Not yet implemented | Stage 2 implementation |
-| Validation acceptance tolerances | Requires implementation testing | Stage 2 testing |
+| Validation acceptance tolerances | Requires implementation testing against actual data | Stage 2 validation activity (not an entry blocker) |
 
 ## Recommendation
 
-BLS transit-period detection as the initial photometric operation, serving exoplanet science. Lomb–Scargle documented as future capability for stellar variability. Kepler-10b as candidate representative dataset and benchmark (pending file inspection).
+BLS transit-period detection as the initial photometric operation, serving exoplanet science. Lomb–Scargle documented as future capability for stellar variability. Kepler-10b Q0 as candidate representative dataset and benchmark (file inspected; suitable for targeted period-recovery testing).
 
 ## Related Records
 

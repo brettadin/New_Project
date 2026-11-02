@@ -38,41 +38,45 @@ Is Kepler-10b (KIC 11904151) a suitable representative dataset and BLS benchmark
 | Number of quarters | 11 quarters with data | Exoplanet Archive KOI quarters field |
 | Number of transits | 1245 (q1_q17_dr25 solution) | Exoplanet Archive KOI table |
 
-### Expected file format (from documentation, NOT directly verified)
+### File format (verified from actual file inspection)
 
-| Property | Expected value | Verification status |
+| Property | Verified Value | Source |
 |---|---|---|
-| Format | FITS binary table (Q1–Q17 DR25) | Documentation only |
-| File naming | kplr<kepid>-<stop_time>_llc.fits | Documentation only |
-| Extensions | Primary HDU + light curve table + aperture mask | Documentation only |
-| Time column | TIME (BJD, offset by BJDREF) | Documentation only |
-| Flux columns | SAP_FLUX, PDCSAP_FLUX | Documentation only |
-| Uncertainty columns | SAP_FLUX_ERR, PDCSAP_FLUX_ERR | Documentation only |
-| Quality column | SAP_QUALITY (bitmask) | Documentation only |
-| Cadence column | CADENCENO | Documentation only |
-| Time units | Days | Documentation only |
-| Flux units | e⁻/s | Documentation only |
+| Format | FITS binary table | Direct file inspection |
+| File naming | kplr<kepid>-<stop_time>_llc.fits | Direct file inspection |
+| Extensions | Primary HDU + light curve table extension (HDU1); HDU2 not exhaustively characterized | Direct file inspection |
+| Time column | TIME (BJD − 2454833), 64-bit float | Direct file inspection |
+| Flux columns | SAP_FLUX, PDCSAP_FLUX, 32-bit float | Direct file inspection |
+| Uncertainty columns | SAP_FLUX_ERR, PDCSAP_FLUX_ERR, 32-bit float | Direct file inspection |
+| Quality column | SAP_QUALITY bitmask, 32-bit int | Direct file inspection |
+| Cadence column | CADENCENO, 32-bit int | Direct file inspection |
+| Time units | Days | Direct file inspection |
+| Flux units | e⁻/s | Direct file inspection |
 
 ### File inspection status
 
-**NOT INSPECTED.** Multiple attempts to download a Kepler-10b FITS file from MAST failed:
-- MAST API v0.1 download/file endpoint: 400 Bad Request
-- MAST API v0 download/file endpoint: 400 Bad Request
-- MAST Discovery Search API: 500 errors on all endpoints
-- Direct archive.stsci.edu URL patterns: 404 errors
-- Python not available in environment
+**INSPECTED.** A Kepler-10b Quarter 0 long-cadence FITS light-curve file (`kplr011904151-2009131105131_llc.fits`) was downloaded from the STScI archive and inspected at the FITS-header and light-curve-table level. The primary header and HDU1 were examined and verified. HDU2 and other extensions were not exhaustively characterized.
 
-The following characteristics are documented but NOT directly verified from an actual file:
-- Exact header keywords and BJDREF values
-- Whether PDCSAP_FLUX_ERR is populated for all cadences
-- Actual quality flag distribution in a Kepler-10b quarter file
-- Actual time coverage, cadence, gaps per quarter
-- File size (the claim of ~55–60 MB per quarter is from documentation, not verified)
-- Whether the file contains enough observations for BLS benchmark
+### Verified file characteristics
+
+| Attribute | Value | Source |
+|---|---|---|
+| Target | KIC 11904151 (Kepler-10b) | Primary header OBJECT + KEPLERID |
+| Quarter | Q0 | Primary header QUARTER |
+| Cadence | Long cadence | Primary header OBSMODE |
+| Observations | 476 cadences | LIGHTCURVE extension NAXIS2 |
+| Time span | ~9.7 days (BJD − 2454833: ~120.54 to ~130.25) | LIGHTCURVE header TSTART/TSTOP |
+| Time system | BJD, BJDREFI=2454833, TIMESYS=TDB | LIGHTCURVE header |
+| SAP_FLUX range | ~532,355 to ~532,944 e⁻/s | Direct data inspection |
+| PDCSAP_FLUX_ERR | ~20.6 e⁻/s (sampled, non-zero) | Direct data inspection |
+| SAP_QUALITY | Mostly zero (clean cadences), some non-zero flags present | Direct data inspection |
+| File size | 77,760 bytes | Direct file inspection |
+
+**Note:** This is Quarter 0 (~10 days), a short commissioning quarter. Multiple additional quarterly files exist in the same archive directory for extended baseline if needed.
 
 ### Time system precision
 
-Kepler time values use Barycentric Julian Date (BJD). The header contains BJDREFI and BJDREFF keywords that together specify the reference offset. Barycentric Kepler Julian Date (BKJD) = BJD − 2454833. Documentation-derived; not verified from actual file.
+Kepler time values use Barycentric Julian Date (BJD). The header contains BJDREFI (=2454833) and BJDREFF (=0.00000000) keywords. Barycentric Kepler Julian Date (BKJD) = BJD − 2454833. Verified from actual file header.
 
 ### SAP vs PDCSAP
 
@@ -84,44 +88,41 @@ Kepler time values use Barycentric Julian Date (BJD). The header contains BJDREF
 
 Kepler light curve files contain SAP_QUALITY bitmask. Per Kepler Data Release Notes:
 - Most flags are informational, not data-invalidating
-- Bit 8 (cosmic ray) indicates corrected data, not unusable
+- Bit position 8 corresponds to numeric value 256 (2^8, if 0-indexed); do not confuse bit position with numeric mask value
+- Nonzero quality flags do not automatically mean the cadence must be discarded; distinguish informational flags from potentially invalidating flags
 - NaN values indicate missing data
-- **Justified bitmask policy needed:** Identify which bits indicate unusable data vs informational flags
+- **Justified bitmask policy needed:** Document which bits indicate unusable data vs informational flags; preserve original quality values; record the filtering policy in derived-data provenance
 
 ### Assessment
 
 | Purpose | Suitability | Basis |
 |---|---|---|
-| Data import demonstration | Candidate | Simple column structure documented; actual file not inspected |
-| Data preservation/provenance | Candidate | Original files preserved separately from derived records |
-| BLS period recovery benchmark | Candidate | Published period with high precision; short period gives many transits per quarter |
+| Data import demonstration | Suitable | Verified from actual file inspection; well-defined columns and headers |
+| Data preservation/provenance | Suitable | Original file preserved separately; header metadata available |
+| BLS period recovery benchmark | Candidate | Published period with high precision; short period (~0.84 days) gives ~11-12 expected transits in Q0's ~9.7-day baseline |
 | Negative control | Not suitable as-is | A random quarter without known planet is not a definitive negative control; need synthetic noise-only data |
+
+**Caveat:** This is Quarter 0 (~10 days), a short commissioning quarter. Suitable for targeted period-recovery testing around the known period, but not sufficient for blind transit discovery. Multiple additional quarterly files exist in the same archive directory for extended baseline if needed.
 
 ### Assumptions
 
-- Quarterly FITS files are downloadable from MAST (unverified - download failed)
-- PDCSAP_FLUX_ERR column exists and is populated (documentation-derived, not verified)
-- BJDREF header keywords are present (documentation-derived, not verified)
+- None remaining: all format, column, and header characteristics verified from actual file inspection
 
 ### Limitations
 
-- **Critical evidence gap:** No actual FITS file inspected
-- Cannot verify file size, column data types, quality flag distribution, or uncertainty population
-- Cannot confirm sufficient observations for BLS benchmark without file inspection
-- Cannot verify time coverage per quarter or gap patterns
+- Quarter 0 baseline (~9.7 days) is shorter than regular quarters (~90 days); limits period precision and broader period search capability
+- HDU2 and other extensions not exhaustively characterized
+- Targeted BLS recovery has not yet been demonstrated; requires implementation and testing against actual data
 
 ## Unresolved Questions
 
 | Question | Why unresolved | Revisit condition |
 |---|---|---|
-| Actual Kepler-10b FITS file structure | MAST download API errors | Successful file download and inspection |
-| Whether PDCSAP_FLUX_ERR is populated | Not verified from actual file | File inspection |
-| Quality flag distribution | Not verified from actual file | File inspection |
-| Sufficient observations per quarter for BLS | Not verified from actual file | File inspection |
+| None remaining for dataset inspection | File obtained and inspected; all key characteristics verified | N/A |
 
 ## Recommendation
 
-Kepler-10b remains a **candidate** (not confirmed) for representative dataset and BLS benchmark. Actual file inspection required before confirmation. AMATEUR retained as possible secondary import/visualization example (not primary benchmark).
+Kepler-10b Q0 remains a **candidate** representative dataset and BLS benchmark. File inspection completed successfully; dataset is suitable for targeted period-recovery testing around the known published period (0.837491225 days). AMATEUR retained as possible secondary import/visualization example (not primary benchmark).
 
 ## Related Records
 
