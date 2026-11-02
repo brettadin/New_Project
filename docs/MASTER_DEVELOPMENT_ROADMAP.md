@@ -21,7 +21,7 @@ Single authoritative source for overall development planning and progress (§10.
 
 | ID | Decision | Status | Blocks | Required Research |
 |---|---|---|---|---|
-| D1 | Initial platform direction | Pending | Stage 2 implementation | T1: platform evaluation vs §9.1.9 criteria |
+| D1 | Initial platform direction | Approved (desktop-first) | No longer blocks Stage 2 | T1: platform evaluation vs §9.1.9 criteria (complete — REVIEW-003) |
 
 ## Decisions Deferred
 
@@ -45,8 +45,8 @@ Single authoritative source for overall development planning and progress (§10.
 | Stage | Objective | Status | Depends On | Produces |
 |---|---|---|---|---|
 | **0. Documentation & decision baseline** | README index, roadmap, development log, templates, decision records (D2–D4), project identity record, unresolved-questions register, Git init | Approved / Complete | User approval of D2–D4 | `docs/README.md`, roadmap, log, templates, decision records, identity register, unresolved-questions register |
-| **1. Targeted research** | T1 platform evaluation vs §9.1.9 criteria; BLS vs Lomb–Scargle comparison; Kepler-10b dataset profile; D1 and BLS operation decision records prepared | Complete (research only) | Stage 0 complete | Research records (`docs/science/`, `docs/technical/`), D1 decision record (DEC-004, pending), BLS operation decision record (DEC-005, pending) |
-| **2. First useful scientific vertical slice** | Project create/open/save; import one light-curve dataset; preserve original + provenance; table + light-curve visualization; one photometric operation (BLS) with uncertainty; record operation and parameters | Pending | Stage 1 complete; D1 approval; BLS operation approval; S1–S4, S7 research; Kepler-10b file inspection | End-to-end reproducible light-curve analysis on real data |
+| **1. Targeted research** | T1 platform evaluation vs §9.1.9 criteria; BLS vs Lomb–Scargle comparison; Kepler-10b dataset profile; D1 and BLS operation decision records prepared | Complete (research/documentation only) | Stage 0 complete | Research records (`docs/science/`, `docs/technical/`), D1 decision record (DEC-004, Approved), BLS operation decision record (DEC-005, Approved), .gitignore |
+| **2. First useful scientific vertical slice** | Project create/open/save; import one light-curve dataset; preserve original + provenance; table + light-curve visualization; one photometric operation (BLS) with uncertainty; record operation and parameters | Pending | Stage 1 complete; D1 approval (obtained); BLS operation approval (obtained); S1–S4, S7 research; Kepler-10b file inspection (evidence gap) | End-to-end reproducible light-curve analysis on real data |
 | **3. Reproducibility (user-facing)** | Analysis-record inspection, replay, portable analysis packages, project export/import | Pending | Stages 2 | Reproducible investigations |
 | **4. First external integration** | One archive, metadata-first retrieval, caching, licence/auth (D10 must be approved first) | Pending | Stage 3; D10 approval | Retrieval of real archive data |
 | **5. Contextual education slice** | Method explanations attached to the capability | Pending | Stage 2 | In-context learning support |
@@ -77,9 +77,9 @@ Single authoritative source for overall development planning and progress (§10.
 
 | ID | Description | Impact | Mitigation |
 |---|---|---|---|
-| R1 | Platform not yet selected (D1 pending) | Blocks Stage 2 | Obtain D1 approval (DEC-004) |
-| R2 | BLS operation not yet approved | Blocks Stage 2 analytical operation | Obtain BLS operation approval (DEC-005) |
-| R3 | Kepler-10b FITS file not inspected | Evidence gap for Stage 2 import/validation | Retry MAST download or select alternative dataset |
+| R1 | D1 platform approved (desktop-first) | Resolved | DEC-004 Approved |
+| R2 | BLS operation approved | Resolved | DEC-005 Approved |
+| R3 | Kepler-10b FITS file not inspected | Blocks Stage 2 import/validation | Retry MAST download or select alternative dataset |
 | R4 | Storage architecture not finalized (D6 deferred) | Low for first slice | Provisional local-file approach with documented limitations |
 
 ## Consultation Requirements

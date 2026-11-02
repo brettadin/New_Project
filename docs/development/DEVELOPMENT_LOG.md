@@ -39,31 +39,41 @@ Chronological record of development activity. Maintained continuously as work pr
 
 **Status:** Stage 0 complete.
 
-### 2026-11-02 — Stage 1 research completed
+### 2026-11-02 — Stage 1 research completed; D1 and BLS decisions approved
 
-**Activity:** Stage 1 targeted scientific and technical research (Plan mode — no files modified during research phase).
+**Activity:** Stage 1 targeted scientific and technical research (Plan mode — no files modified during research phase). Build mode: created research records, decision records, .gitignore; made authorized Foundation change.
 
-**Research completed:**
-- T1 platform evaluation vs §9.1.9 criteria → REVIEW-003 (`docs/technical/REVIEW-003-platform-evaluation.md`)
-- BLS vs Lomb–Scargle comparison → REVIEW-001 (`docs/science/REVIEW-001-bls-method.md`)
-- Kepler-10b dataset profile → REVIEW-002 (`docs/science/REVIEW-002-kepler10b-dataset.md`)
-- D1 platform decision record → DEC-004 (`docs/development/decisions/DEC-004-d1-platform.md`) — Pending user approval
-- BLS operation decision record → DEC-005 (`docs/development/decisions/DEC-005-bls-operation.md`) — Pending user approval
+**Files created (6):**
+- `docs/science/REVIEW-001-bls-method.md` — BLS vs Lomb–Scargle method research (§11.4.5, §12.2)
+- `docs/science/REVIEW-002-kepler10b-dataset.md` — Kepler-10b dataset profile (§11.4.5, §12.2)
+- `docs/technical/REVIEW-003-platform-evaluation.md` — T1 platform evaluation vs §9.1.9 (§11.4.5, §12.3)
+- `docs/development/decisions/DEC-004-d1-platform.md` — D1 platform decision record (§10.9.5) — Approved
+- `docs/development/decisions/DEC-005-bls-operation.md` — BLS operation decision record (§10.9.5) — Approved
+- `.gitignore` — Repository ignore rules for caches, environments, datasets, large data formats
 
-**Foundation change authorized:**
+**Files modified (4):**
+- `docs/development/DEVELOPMENT_LOG.md` — this rolling development record (§10.11.3)
+- `docs/MASTER_DEVELOPMENT_ROADMAP.md` — master development roadmap (§10.3.4)
+- `docs/development/UNRESOLVED_QUESTIONS.md` — unresolved-questions register (§13.1)
+- `docs/Foundation/3.4_Photometry, Transits and Time-Series Analysis.md` §3.4.8 — added one sentence documenting Lomb–Scargle as future capability
+
+**Foundation change made:**
 - `docs/Foundation/3.4_Photometry, Transits and Time-Series Analysis.md` §3.4.8 — Added one sentence: "Future capabilities should include Lomb–Scargle periodogram analysis for investigating approximately sinusoidal periodic signals, including stellar variability."
 
 **File inspection status:**
-- Kepler-10b FITS file: NOT inspected — MAST download API returned errors on all endpoints attempted. Dataset profile (REVIEW-002) is documentation-derived, not directly verified from file inspection. This is an explicit evidence gap.
+- Kepler-10b FITS file: NOT inspected — MAST download API returned errors on all endpoints attempted. Dataset profile (REVIEW-002) is documentation-derived, not directly verified from file inspection. This is an explicit evidence gap (UQ-008 remains open).
 
-**Decisions pending user approval:**
-- D1: Initial platform strategy (DEC-004 — desktop-first recommended)
-- BLS operation: Initial photometric workflow (DEC-005 — BLS transit-period detection recommended, Lomb–Scargle as future capability)
+**Decisions approved:**
+- D1: Initial platform strategy — desktop-first (DEC-004 — Approved)
+- BLS operation: Initial photometric workflow — BLS transit-period detection; Lomb–Scargle retained as future capability (DEC-005 — Approved)
+
+**Distinction — Stage 1 complete vs Stage 2 ready:**
+- Stage 1 research/documentation: Complete. All research records and decision records exist.
+- Stage 2 readiness: Not yet ready. Kepler-10b file inspection (UQ-008) remains an open evidence gap that blocks Stage 2 import and validation work.
 
 **Next steps:**
-- Obtain D1 approval (DEC-004)
-- Obtain BLS operation approval (DEC-005)
-- Attempt Kepler-10b FITS file inspection again (evidence gap)
-- Begin Stage 2 only after Stage 1 complete, D1 approval, and S1–S4, S7 research
+- Resolve Kepler-10b file inspection evidence gap (UQ-008)
+- Address validation tolerances question (UQ-009)
+- Begin Stage 2 only after evidence gap resolved
 
-**Status:** Stage 1 research complete. Stage 2 not yet ready (D1 pending).
+**Status:** Stage 1 research complete. Stage 2 not yet ready (Kepler-10b file inspection pending).

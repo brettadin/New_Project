@@ -1,0 +1,146 @@
+# =============================================================================
+# Project .gitignore — New_Project (astronomy research application)
+# Purpose: Keep the repository lightweight; exclude caches, local environments,
+# generated artifacts, and downloaded research datasets from version control.
+# =============================================================================
+
+# --- Python caches and compiled files ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+parts/
+lib/
+lib64/
+__pypackages__/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# --- Virtual environments ---
+.venv/
+venv/
+ENV/
+env/
+.ENV/
+.env
+
+# --- IDE / editor files ---
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# --- Test and coverage caches ---
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+coverage.xml
+*.cover
+
+# --- Build and packaging output ---
+*.tar.gz
+*.whl
+*.zip
+
+# --- Application logs and temporary files ---
+*.log
+logs/
+tmp/
+temp/
+*.tmp
+*.temp
+
+# --- Local databases and journals ---
+*.db
+*.sqlite
+*.sqlite3
+*-journal
+*.log.journal
+
+# --- Downloaded research datasets and raw observational data ---
+# These are project research materials, not application source or documentation.
+datasets/
+data/
+raw_data/
+research_data/
+sample_data/
+test_data/
+
+# --- Large scientific data formats (do not enter Git) ---
+*.fits
+*.fit
+*.fts
+*.fz
+*.fz.fits
+
+# --- Generated analysis results, exports, plots, intermediate processing ---
+output/
+results/
+plots/
+exports/
+*.png
+*.jpg
+*.jpeg
+*.svg
+*.pdf
+*.h5
+*.hdf5
+*.npz
+*.npy
+
+# --- Local application configuration (may contain private paths or credentials) ---
+.config.local.yaml
+.config.local.yml
+.config.local.json
+config.local.py
+settings.local.py
+*.local.env
+secrets/
+*.secret
+*.key
+*.pem
+
+# --- OS-generated files ---
+.Spotlight-V100
+.Trashes
+.eaDirectory
+
+# =============================================================================
+# Explicitly NOT ignored (keep these in the repository):
+# - Source code and application files
+# - Documentation under docs/
+# - Templates under docs/templates/
+# - Decision records under docs/development/decisions/
+# - Research reviews under docs/science/ and docs/technical/
+# - Development log and roadmap
+# =============================================================================
+!docs/
+!docs/**/*.md
+!docs/templates/
+!docs/templates/*.md
+!docs/development/
+!docs/development/*.md
+!docs/development/decisions/
+!docs/development/decisions/*.md
+!docs/science/
+!docs/science/*.md
+!docs/technical/
+!docs/technical/*.md
+!AGENTS.md
+!README.md
+!README.txt
+!*.md

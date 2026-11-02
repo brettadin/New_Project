@@ -2,7 +2,7 @@
 
 **Record ID:** DEC-004
 **Date:** 2026-11-02
-**Status:** Pending
+**Status:** Approved
 **Decision Maker:** User
 
 ## 1. Decision Required
@@ -25,7 +25,7 @@ D1 (platform strategy) is distinct from D5 (technology stack). D1 determines whe
 
 Option A: Desktop-first. Best satisfies §9.1.9 criteria for scientific computing performance, local system access, offline functionality, and future hybrid compatibility. Scientific logic can be exposed via API to a future web platform (§9.1.2).
 
-This is a **recommendation only**. No platform has been selected. D5 technology stack (specific frameworks, libraries) remains separate and deferred.
+**User decision: Approved.** Desktop-first is the initial platform strategy. D5 technology stack (specific frameworks, libraries) remains separate and deferred.
 
 ## 5. Consequences
 
@@ -40,16 +40,16 @@ Decides platform strategy only. Does not select technology stack, frameworks, or
 
 ## 7. Confirmation
 
-User approval requested for desktop-first platform strategy. D5 remains separate and deferred.
+User approved desktop-first as the initial platform strategy.
 
 ## Approval Record
 
-- **User response:** Pending (awaiting user decision)
-- **Conditions or limitations:** None specified
-- **Date of response:** Not yet provided
+- **User response:** Approved
+- **Conditions or limitations:** D5 technology stack remains separate and deferred; no specific framework (Electron, Tauri, Wails, Python GUI, or other) selected as part of this decision
+- **Date of response:** 2026-11-02
 - **Affected requirements:** §9.1, §9.1.9, §10.4.2
-- **Affected roadmap items:** Stage 2 (blocked by D1 approval)
-- **Required follow-up actions:** None until user approval
+- **Affected roadmap items:** Stage 2 (no longer blocked by D1; now unblocked subject to other gates)
+- **Required follow-up actions:** None; D5 remains deferred
 
 ## Related Records
 
