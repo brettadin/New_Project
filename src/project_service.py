@@ -45,6 +45,7 @@ class ProjectService:
         self.config_provider = config_provider
         self._default_repository = repository
         self._active_project: ProjectMetadata | None = None
+        self._active_location: str | None = None
 
     @property
     def active_project(self) -> ProjectMetadata | None:
@@ -103,6 +104,7 @@ class ProjectService:
             ) from exc
 
         self._active_project = metadata
+        self._active_location = root
         return metadata
 
     @staticmethod
@@ -136,6 +138,26 @@ class ProjectService:
         self._active_project = metadata
 
     # ------------------------------------------------------------------
+    # Status management
+    # ------------------------------------------------------------------
+
+    def change_status(self, status: str) -> ProjectMetadata:
+        """Change the active project's lifecycle status.
+
+        Delegates validation and dirty tracking to
+        :meth:`ProjectMetadata.set_status`. Does not automatically save;
+        the caller must invoke :meth:`save_project` to persist.
+
+        Raises:
+            ProjectRepositoryError: if no active project.
+            ProjectValidationError: if the status is invalid.
+        """
+        if self._active_project is None:
+            raise ProjectRepositoryError("No active project.")
+        self._active_project.set_status(status)
+        return self._active_project
+
+    # ------------------------------------------------------------------
     # Saving
     # ------------------------------------------------------------------
 
@@ -151,9 +173,21 @@ class ProjectService:
         if self._active_project is None:
             raise ProjectRepositoryError("No active project to save.")
 
-        repo = self._default_repository or self._repository_for(
-            self.default_location
-        )
+        # Determine the correct repository:
+        # 1. Active project's location (if set)
+        # 2. Injected default repository if its projects_root matches
+        # 3. A repository created for the active location
+        # 4. Default location fallback when no active location is available
+        active_location = self._active_location or self.default_location
+
+        if (
+            self._default_repository is not None
+            and self._default_repository.projects_root == Path(active_location)
+        ):
+            repo = self._default_repository  # Preserve DI for same location
+        else:
+            repo = self._repository_for(active_location)
+
         try:
             repo.save(self._active_project)
         except ProjectRepositoryError:
@@ -177,6 +211,7 @@ class ProjectService:
         calling this method.
         """
         self._active_project = None
+        self._active_location = None
 
     # ------------------------------------------------------------------
     # Discovery
@@ -231,6 +266,7 @@ class ProjectService:
         except ProjectRepositoryError as exc:
             raise ProjectOpeningError(str(exc)) from exc
         self._active_project = metadata
+        self._active_location = root
         return metadata
 
     def open_project_from_path(self, directory: str | Path) -> ProjectMetadata:
@@ -254,4 +290,5 @@ class ProjectService:
         except ProjectRepositoryError as exc:
             raise ProjectOpeningError(str(exc)) from exc
         self._active_project = metadata
+        self._active_location = str(Path(directory).parent)
         return metadata

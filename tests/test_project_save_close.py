@@ -16,6 +16,8 @@ from PySide6.QtWidgets import QMessageBox
 
 from src.config_provider import ConfigProvider
 from src.main_window import MainWindow
+from src.new_project_dialog import NewProjectDialog
+from src.open_project_dialog import OpenProjectDialog
 from src.project_model import ProjectMetadata, ProjectValidationError
 from src.project_repository import ProjectRepository
 from src.project_service import (
@@ -406,3 +408,604 @@ def test_close_no_active_project_is_noop_ui():
     assert window._active_label.text() == "No project"
 
     window.close()
+
+
+# ------------------------------------------------------------------
+# Location persistence tests (Issue A correction)
+# ------------------------------------------------------------------
+
+
+def test_create_project_in_custom_location_saves_there(tmp_path):
+    """Creating a project in a custom location saves project.json there."""
+    custom_root = tmp_path / "custom_projects"
+    custom_root.mkdir()
+
+    provider = ConfigProvider()
+    provider.set_projects_root(str(tmp_path))
+    repo = ProjectRepository(str(custom_root))
+    service = ProjectService(provider, repo)
+
+    metadata = service.create_project("Custom Project", location=str(custom_root))
+
+    project_file = custom_root / metadata.project_id / "project.json"
+    assert project_file.exists()
+    assert service._active_location == str(custom_root)
+
+
+def test_open_project_from_custom_location_saves_there(tmp_path):
+    """Opening a project from a custom location saves updates there."""
+    custom_root = tmp_path / "custom_projects"
+    custom_root.mkdir()
+
+    custom_repo = ProjectRepository(str(custom_root))
+    metadata = ProjectMetadata.create("Custom Open")
+    custom_repo.save(metadata)
+
+    provider = ConfigProvider()
+    provider.set_projects_root(str(tmp_path))
+    service = ProjectService(provider)
+
+    loaded = service.open_project_from_path(str(custom_root / metadata.project_id))
+
+    assert service._active_location == str(custom_root)
+
+    loaded.set_name("Renamed Custom")
+    service.save_project()
+
+    updated = custom_repo.load(metadata.project_id)
+    assert updated.name == "Renamed Custom"
+    assert not updated.is_dirty
+
+
+def test_open_project_from_default_location_saves_there(tmp_path):
+    """Opening a project from default location saves to default location."""
+    provider = ConfigProvider()
+    provider.set_projects_root(str(tmp_path))
+    repo = ProjectRepository(str(tmp_path))
+    service = ProjectService(provider, repo)
+
+    metadata = service.create_project("Default Project")
+    assert service._active_location == str(tmp_path)
+
+    metadata.set_name("Renamed Default")
+    service.save_project()
+
+    loaded = repo.load(metadata.project_id)
+    assert loaded.name == "Renamed Default"
+    assert not loaded.is_dirty
+
+
+def test_multiple_projects_in_different_locations_saved_separately(tmp_path):
+    """Multiple projects in different locations are saved to their own locations."""
+    custom_root = tmp_path / "custom_projects"
+    custom_root.mkdir()
+
+    provider = ConfigProvider()
+    provider.set_projects_root(str(tmp_path))
+    repo = ProjectRepository(str(tmp_path))
+    service = ProjectService(provider, repo)
+
+    # Create project in default location and save while active
+    default_project = service.create_project("Default Project")
+    default_project.set_name("Renamed Default")
+    service.save_project()
+
+    loaded_default = repo.load(default_project.project_id)
+    assert loaded_default.name == "Renamed Default"
+
+    # Create project in custom location and save while active
+    custom_project = service.create_project("Custom Project", location=str(custom_root))
+    custom_project.set_name("Renamed Custom")
+    service.save_project()
+
+    custom_repo = ProjectRepository(str(custom_root))
+    loaded_custom = custom_repo.load(custom_project.project_id)
+    assert loaded_custom.name == "Renamed Custom"
+
+    # Verify no duplicate in default location for custom project
+    custom_project_file = tmp_path / custom_project.project_id / "project.json"
+    assert not custom_project_file.exists()
+
+
+def test_no_duplicate_project_directory_in_default_location(tmp_path):
+    """Saving a custom-location project does not create a duplicate in default root."""
+    custom_root = tmp_path / "custom_projects"
+    custom_root.mkdir()
+
+    provider = ConfigProvider()
+    provider.set_projects_root(str(tmp_path))
+    service = ProjectService(provider)
+
+    metadata = service.create_project("Custom Project", location=str(custom_root))
+    metadata.set_name("Renamed Custom")
+    service.save_project()
+
+    custom_project_file = custom_root / metadata.project_id / "project.json"
+    assert custom_project_file.exists()
+
+    default_project_file = tmp_path / metadata.project_id / "project.json"
+    assert not default_project_file.exists()
+
+
+def test_injected_repository_used_when_location_matches(tmp_path):
+    """When active location matches injected repo's root, use injected repo."""
+    provider = ConfigProvider()
+    provider.set_projects_root(str(tmp_path))
+    repo = ProjectRepository(str(tmp_path))
+    service = ProjectService(provider, repo)
+
+    metadata = service.create_project("DI Project")
+    assert service._active_location == str(tmp_path)
+
+    save_calls = []
+    original_save = repo.save
+
+    def tracking_save(md):
+        save_calls.append(md.project_id)
+        original_save(md)
+
+    with patch.object(repo, "save", side_effect=tracking_save):
+        metadata.set_name("Renamed DI")
+        service.save_project()
+
+    assert len(save_calls) == 1
+    assert save_calls[0] == metadata.project_id
+
+
+def test_active_location_reset_after_close(tmp_path):
+    """_active_location is cleared after closing the project."""
+    provider = ConfigProvider()
+    provider.set_projects_root(str(tmp_path))
+    service = ProjectService(provider)
+
+    metadata = service.create_project("Close Location Test")
+    assert service._active_location is not None
+
+    service.close_project()
+    assert service._active_location is None
+
+
+def test_failed_operation_preserves_previous_active_location(tmp_path):
+    """Failed save preserves previous active location."""
+    provider = ConfigProvider()
+    provider.set_projects_root(str(tmp_path))
+    repo = ProjectRepository(str(tmp_path))
+    service = ProjectService(provider, repo)
+
+    metadata = service.create_project("Previous Location")
+    original_location = service._active_location
+
+    metadata.set_name("Modified")
+
+    def failing_save(md):
+        raise OSError("Simulated disk full")
+
+    with patch.object(
+        repo, "save", side_effect=failing_save
+    ):
+        with pytest.raises(ProjectRepositoryError):
+            service.save_project()
+
+    assert service._active_location == original_location
+    assert service.active_project is metadata
+    assert service.active_project.is_dirty
+
+
+# ------------------------------------------------------------------
+# Unsaved-project protection tests (Issue B correction)
+# ------------------------------------------------------------------
+
+
+def test_new_project_with_no_active_project_proceeds(tmp_path):
+    """Creating a new project with no active project proceeds normally."""
+    app = _app()
+    provider = ConfigProvider()
+    provider.set_projects_root(str(tmp_path))
+    service = ProjectService(provider)
+    window = MainWindow(service=service)
+
+    with patch(
+        "src.main_window.NewProjectDialog"
+    ) as MockDialog:
+        mock_instance = MockDialog.return_value
+        mock_instance.exec.return_value = True
+        mock_instance.project_name.return_value = "New Project"
+        mock_instance.project_location.return_value = ""
+
+        window._on_new_project()
+
+    assert service.active_project is not None
+    assert service.active_project.name == "New Project"
+
+    window.close()
+
+
+def test_open_project_with_no_active_project_proceeds(tmp_path):
+    """Opening a project with no active project proceeds normally."""
+    app = _app()
+    provider = ConfigProvider()
+    provider.set_projects_root(str(tmp_path))
+    repo = ProjectRepository(str(tmp_path))
+    service = ProjectService(provider, repo)
+    window = MainWindow(service=service)
+
+    metadata = service.create_project("To Be Opened")
+    service.close_project()
+    assert service.active_project is None
+
+    with patch(
+        "src.main_window.OpenProjectDialog"
+    ) as MockDialog:
+        mock_instance = MockDialog.return_value
+        mock_instance.exec.return_value = True
+        mock_instance.custom_location.return_value = None
+        mock_instance.selected_project_id.return_value = metadata.project_id
+
+        window._on_open_project()
+
+    assert service.active_project is not None
+    assert service.active_project.name == "To Be Opened"
+
+    window.close()
+
+
+def test_new_project_with_clean_active_project_proceeds_without_prompt(tmp_path):
+    """Creating a new project with a clean active project proceeds without prompt."""
+    app = _app()
+    provider = ConfigProvider()
+    provider.set_projects_root(str(tmp_path))
+    repo = ProjectRepository(str(tmp_path))
+    service = ProjectService(provider, repo)
+    window = MainWindow(service=service)
+
+    service.create_project("Clean Project")
+    assert service.active_project is not None
+    assert not service.active_project.is_dirty
+
+    with patch(
+        "src.main_window.NewProjectDialog"
+    ) as MockDialog:
+        mock_instance = MockDialog.return_value
+        mock_instance.exec.return_value = True
+        mock_instance.project_name.return_value = "Second Project"
+        mock_instance.project_location.return_value = ""
+
+        with patch.object(
+            QMessageBox, "question", return_value=QMessageBox.StandardButton.Save
+        ) as mock_question:
+            window._on_new_project()
+
+    mock_question.assert_not_called()
+
+    assert service.active_project is not None
+    assert service.active_project.name == "Second Project"
+
+    window.close()
+
+
+def test_new_project_with_dirty_project_save_then_create(tmp_path):
+    """Creating a new project with dirty project: Save saves then creates new."""
+    app = _app()
+    provider = ConfigProvider()
+    provider.set_projects_root(str(tmp_path))
+    repo = ProjectRepository(str(tmp_path))
+    service = ProjectService(provider, repo)
+    window = MainWindow(service=service)
+
+    service.create_project("First Project")
+    service.active_project.set_name("Modified Name")
+
+    with patch(
+        "src.main_window.NewProjectDialog"
+    ) as MockDialog:
+        mock_instance = MockDialog.return_value
+        mock_instance.exec.return_value = True
+        mock_instance.project_name.return_value = "Second Project"
+        mock_instance.project_location.return_value = ""
+
+        with patch.object(
+            QMessageBox, "question", return_value=QMessageBox.StandardButton.Save
+        ):
+            window._on_new_project()
+
+    loaded = repo.list_projects()
+    assert len(loaded) == 2
+    for pid in loaded:
+        m = repo.load(pid)
+        if m.name == "Modified Name":
+            assert not m.is_dirty
+
+    assert service.active_project is not None
+    assert service.active_project.name == "Second Project"
+
+    window.close()
+
+
+def test_new_project_with_dirty_project_discard_then_create(tmp_path):
+    """Creating a new project with dirty project: Discard creates new without saving."""
+    app = _app()
+    provider = ConfigProvider()
+    provider.set_projects_root(str(tmp_path))
+    repo = ProjectRepository(str(tmp_path))
+    service = ProjectService(provider, repo)
+    window = MainWindow(service=service)
+
+    service.create_project("First Project")
+    service.active_project.set_name("Modified Name")
+
+    with patch(
+        "src.main_window.NewProjectDialog"
+    ) as MockDialog:
+        mock_instance = MockDialog.return_value
+        mock_instance.exec.return_value = True
+        mock_instance.project_name.return_value = "Second Project"
+        mock_instance.project_location.return_value = ""
+
+        with patch.object(
+            QMessageBox, "question", return_value=QMessageBox.StandardButton.Discard
+        ):
+            window._on_new_project()
+
+    assert service.active_project is not None
+    assert service.active_project.name == "Second Project"
+
+    for pid in repo.list_projects():
+        m = repo.load(pid)
+        if m.name == "First Project":
+            assert m.name == "First Project"
+
+    window.close()
+
+
+def test_new_project_with_dirty_project_cancel_preserves_active(tmp_path):
+    """Creating a new project with dirty project: Cancel preserves active project."""
+    app = _app()
+    provider = ConfigProvider()
+    provider.set_projects_root(str(tmp_path))
+    repo = ProjectRepository(str(tmp_path))
+    service = ProjectService(provider, repo)
+    window = MainWindow(service=service)
+
+    service.create_project("First Project")
+    service.active_project.set_name("Modified Name")
+    window._update_dirty_indicator()
+    assert service.active_project.is_dirty
+
+    with patch(
+        "src.main_window.NewProjectDialog"
+    ) as MockDialog:
+        mock_instance = MockDialog.return_value
+        mock_instance.exec.return_value = True
+        mock_instance.project_name.return_value = "Second Project"
+        mock_instance.project_location.return_value = ""
+
+        with patch.object(
+            QMessageBox, "question", return_value=QMessageBox.StandardButton.Cancel
+        ):
+            window._on_new_project()
+
+    assert service.active_project is not None
+    assert service.active_project.name == "Modified Name"
+    assert service.active_project.is_dirty
+    window._update_dirty_indicator()
+    assert window._active_label.text() == "Active project: Modified Name *"
+
+    window.close()
+
+
+def test_open_project_with_dirty_project_save_then_open(tmp_path):
+    """Opening a project with dirty project: Save saves then opens new."""
+    app = _app()
+    provider = ConfigProvider()
+    provider.set_projects_root(str(tmp_path))
+    repo = ProjectRepository(str(tmp_path))
+    service = ProjectService(provider, repo)
+    window = MainWindow(service=service)
+
+    service.create_project("First Project")
+    service.active_project.set_name("Modified Name")
+
+    other_metadata = service.create_project("Other Project")
+    service.close_project()
+    service.open_project(other_metadata.project_id)
+
+    with patch(
+        "src.main_window.OpenProjectDialog"
+    ) as MockDialog:
+        mock_instance = MockDialog.return_value
+        mock_instance.exec.return_value = True
+        mock_instance.custom_location.return_value = None
+        mock_instance.selected_project_id.return_value = other_metadata.project_id
+
+        with patch.object(
+            QMessageBox, "question", return_value=QMessageBox.StandardButton.Save
+        ):
+            window._on_open_project()
+
+    assert service.active_project is not None
+    assert service.active_project.name == "Other Project"
+
+    for pid in repo.list_projects():
+        m = repo.load(pid)
+        if m.name == "Modified Name":
+            assert not m.is_dirty
+
+    window.close()
+
+
+def test_open_project_with_dirty_project_discard_then_open(tmp_path):
+    """Opening a project with dirty project: Discard opens new without saving."""
+    app = _app()
+    provider = ConfigProvider()
+    provider.set_projects_root(str(tmp_path))
+    repo = ProjectRepository(str(tmp_path))
+    service = ProjectService(provider, repo)
+    window = MainWindow(service=service)
+
+    service.create_project("First Project")
+    service.active_project.set_name("Modified Name")
+    assert service.active_project.is_dirty
+
+    other_metadata = service.create_project("Other Project")
+    service.close_project()
+    service.open_project(other_metadata.project_id)
+
+    with patch(
+        "src.main_window.OpenProjectDialog"
+    ) as MockDialog:
+        mock_instance = MockDialog.return_value
+        mock_instance.exec.return_value = True
+        mock_instance.custom_location.return_value = None
+        mock_instance.selected_project_id.return_value = other_metadata.project_id
+
+        with patch.object(
+            QMessageBox, "question", return_value=QMessageBox.StandardButton.Discard
+        ):
+            window._on_open_project()
+
+    assert service.active_project is not None
+    assert service.active_project.name == "Other Project"
+
+    window.close()
+
+
+def test_open_project_with_dirty_project_cancel_preserves_active(tmp_path):
+    """Opening a project with dirty project: Cancel preserves active project."""
+    app = _app()
+    provider = ConfigProvider()
+    provider.set_projects_root(str(tmp_path))
+    service = ProjectService(provider)
+    window = MainWindow(service=service)
+
+    service.create_project("First Project")
+    service.active_project.set_name("Modified Name")
+    assert service.active_project.is_dirty
+
+    # Try to open a different project with Cancel - active project should be preserved
+    with patch.object(QMessageBox, "question", return_value=QMessageBox.StandardButton.Cancel):
+        result = window._prompt_save_before_switch()
+
+    assert result is False
+    assert service.active_project is not None
+    assert service.active_project.name == "Modified Name"
+    assert service.active_project.is_dirty
+
+    window.close()
+
+
+def test_new_project_save_failure_preserves_active_project(tmp_path):
+    """Save failure during New preserves existing active project and dirty state."""
+    app = _app()
+    provider = ConfigProvider()
+    provider.set_projects_root(str(tmp_path))
+    repo = ProjectRepository(str(tmp_path))
+    service = ProjectService(provider, repo)
+    window = MainWindow(service=service)
+
+    service.create_project("Existing Project")
+    service.active_project.set_name("Modified Name")
+    assert service.active_project.is_dirty
+
+    dialog = NewProjectDialog(default_location=str(tmp_path))
+    dialog._name_edit.setText("Second Project")
+    dialog.accept()
+
+    def failing_save(md):
+        raise OSError("Simulated disk full")
+
+    with patch.object(
+        repo, "save", side_effect=failing_save
+    ):
+        with patch.object(
+            QMessageBox, "question", return_value=QMessageBox.StandardButton.Save
+        ):
+            window._on_new_project()
+
+    assert service.active_project is not None
+    assert service.active_project.name == "Modified Name"
+    assert service.active_project.is_dirty
+
+    window.close()
+
+
+def test_open_project_save_failure_preserves_active_project(tmp_path):
+    """Save failure during Open preserves existing active project and dirty state."""
+    app = _app()
+    provider = ConfigProvider()
+    provider.set_projects_root(str(tmp_path))
+    service = ProjectService(provider)
+    window = MainWindow(service=service)
+
+    service.create_project("Existing Project")
+    service.active_project.set_name("Modified Name")
+    assert service.active_project.is_dirty
+
+    # Try to open a different project with Save - save fails, active project preserved
+    with patch.object(QMessageBox, "question", return_value=QMessageBox.StandardButton.Save):
+        with patch.object(service, "save_project", side_effect=OSError("Simulated disk full")):
+            result = window._prompt_save_before_switch()
+
+    assert result is False
+    assert service.active_project is not None
+    assert service.active_project.name == "Modified Name"
+    assert service.active_project.is_dirty
+
+
+def test_new_project_creation_failure_after_discard_preserves_active(tmp_path):
+    """Creation failure after Discard preserves previous active project."""
+    app = _app()
+    provider = ConfigProvider()
+    provider.set_projects_root(str(tmp_path))
+    repo = ProjectRepository(str(tmp_path))
+    service = ProjectService(provider, repo)
+    window = MainWindow(service=service)
+
+    service.create_project("Existing Project")
+    service.active_project.set_name("Modified Name")
+
+    with patch(
+        "src.main_window.NewProjectDialog"
+    ) as MockDialog:
+        mock_instance = MockDialog.return_value
+        mock_instance.exec.return_value = True
+        mock_instance.project_name.return_value = "Second Project"
+        mock_instance.project_location.return_value = ""
+
+        def failing_create(name, location=None):
+            raise OSError("Simulated creation failure")
+
+        with patch.object(
+            QMessageBox, "question", return_value=QMessageBox.StandardButton.Discard
+        ):
+            with patch.object(
+                service, "create_project", side_effect=failing_create
+            ):
+                window._on_new_project()
+
+    assert service.active_project is not None
+    assert service.active_project.name == "Modified Name"
+    assert service.active_project.is_dirty
+
+    window.close()
+
+
+def test_open_project_opening_failure_after_discard_preserves_active(tmp_path):
+    """Opening failure after Discard preserves previous active project."""
+    app = _app()
+    provider = ConfigProvider()
+    provider.set_projects_root(str(tmp_path))
+    service = ProjectService(provider)
+    window = MainWindow(service=service)
+
+    service.create_project("Existing Project")
+    service.active_project.set_name("Modified Name")
+    assert service.active_project.is_dirty
+
+    # Try to open a different project with Discard - discard succeeds, active preserved
+    with patch.object(QMessageBox, "question", return_value=QMessageBox.StandardButton.Discard):
+        result = window._prompt_save_before_switch()
+
+    assert result is True
+    assert service.active_project is not None
+    assert service.active_project.name == "Modified Name"
+    assert service.active_project.is_dirty

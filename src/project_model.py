@@ -121,6 +121,21 @@ class ProjectMetadata:
         self.name = stripped
         self.mark_dirty()
 
+    def set_status(self, status: str) -> None:
+        """Change the project status and mark the project dirty.
+
+        Assigning an unchanged value does not mark the project dirty.
+        Raises :exc:`ProjectValidationError` if the status is invalid.
+        """
+        if status == self.status:
+            return
+        if status not in VALID_STATUSES:
+            raise ProjectValidationError(
+                f"Status must be one of: {', '.join(VALID_STATUSES)}"
+            )
+        self.status = status
+        self.mark_dirty()
+
     def to_dict(self) -> dict:
         """Serialize metadata to a JSON-compatible dictionary."""
         return {

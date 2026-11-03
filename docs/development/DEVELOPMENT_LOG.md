@@ -192,3 +192,104 @@ Chronological record of development activity. Maintained continuously as work pr
 - Subtask 2.1.6 — Project lifecycle status management (Paused/Completed/Archived transitions)
 
 **Status:** Stage 2 In Progress; Task 2.1 subtasks 2.1.1–2.1.5 complete, 2.1.6 pending.
+
+### 2026-11-03 — Corrective Task: Project Location Persistence and Unsaved-Project Protection
+
+**Activity:** Corrective task addressing two project lifecycle issues identified during GitHub review. Both corrections were applied in Build mode using the existing `.venv` (Python 3.13.9). No Foundation documents modified. No commits or pushes made. No new architectural decisions introduced.
+
+**Issue A — Project location persistence:**
+- `ProjectService` now tracks `_active_location` (runtime-only, not serialized) to record where the active project resides.
+- `_active_location` is set after successful `create_project()`, `open_project()`, or `open_project_from_path()`.
+- `_active_location` is cleared in `close_project()`.
+- `save_project()` now selects the repository based on the active project's location: uses the injected `_default_repository` when its `projects_root` matches the active location (preserving dependency injection and test patching), or creates a new repository for the active location otherwise.
+- Failed operations (create/open/save) do not replace the existing active project or its location.
+
+**Issue B — Unsaved-project protection:**
+- `MainWindow` now has `_prompt_save_before_switch()` that presents Save/Discard/Cancel when the active project is dirty.
+- `_on_new_project()` and `_on_open_project()` call `_prompt_save_before_switch()` after dialog acceptance but before the creation/opening operation.
+- If the user cancels, the existing project remains active and unchanged.
+- If saving fails, the existing project remains active and dirty; the operation is aborted.
+- If creation/opening fails after Discard, the previous active project and its dirty state are preserved.
+
+**Files modified (3):**
+- `src/project_service.py` — Added `_active_location` tracking; updated `save_project()` repository selection; updated `create_project()`, `open_project()`, `open_project_from_path()`, `close_project()` to manage `_active_location`
+- `src/main_window.py` — Added `_prompt_save_before_switch()` method; integrated it into `_on_new_project()` and `_on_open_project()`
+- `tests/test_project_save_close.py` — Added 20 tests for location persistence and unsaved-project protection (total test count now 114)
+
+**Module responsibility boundaries preserved:**
+- `ProjectMetadata`: Stores metadata, tracks dirty state — unchanged
+- `ProjectRepository`: Persists metadata with atomic writes — unchanged
+- `ProjectService`: Location tracking and repository selection — minimal addition
+- `MainWindow`: GUI prompts, user interaction — minimal addition
+
+**Deferred requirement (still recorded, not implemented):**
+- Application exit / window-close event integration (save-on-exit behavior)
+
+**Verified test results (114 tests, all passing):**
+- Total across all test files: 114 tests, 0 failures
+
+**Approved decisions preserved (not modified):**
+- D1: Desktop-first (DEC-004)
+- D2: Photometry/time-series initial capability (DEC-001)
+- D3: Initial scope boundaries (DEC-002)
+- D4: Single-user local, private-by-default, permission-aware (DEC-003)
+- D5: Technology stack Python 3.13/PySide6/NumPy/SciPy/Astropy/Matplotlib/pytest/venv (DEC-006)
+- D6: Data storage model — formal decision deferred; provisional local-file approach for first vertical slice only
+
+**Next steps:**
+- Subtask 2.1.6 — Project lifecycle status management (Paused/Completed/Archived transitions)
+
+**Status:** Stage 2 In Progress; Task 2.1 subtasks 2.1.1–2.1.5 complete (including corrective task), 2.1.6 pending.
+
+### 2026-11-03 — Stage 2 Task 2.1 Subtask 2.1.6 (Project Lifecycle Status Management) complete
+
+**Activity:** Stage 2 implementation — Subtask 2.1.6 project lifecycle status management. Added status-change capability (Active, Paused, Completed, Archived) with dirty tracking, save protection, and UI submenu. All work performed in Build mode using the existing `.venv` (Python 3.13.9). No Foundation documents modified. No commits or pushes made.
+
+**Files created (1):**
+- `tests/test_project_status.py` — 21 tests covering model-level status changes, service-level operations, UI submenu behavior, persistence, and reopening
+
+**Files modified (3):**
+- `src/project_model.py` — Added `set_status()` method following the `set_name()` pattern: validates status, marks dirty only when changed, preserves all other fields
+- `src/project_service.py` — Added `change_status()` method delegating to model; raises `ProjectRepositoryError` when no active project, `ProjectValidationError` for invalid status
+- `src/main_window.py` — Added Status submenu under Project with four checkable actions (Active, Paused, Completed, Archived) in exclusive group; updates checked state on create/open/close/status change; disables when no project
+- `docs/MASTER_DEVELOPMENT_ROADMAP.md` — Task 2.1 subtask 2.1.6 marked Complete; all 2.1 subtasks now Complete
+
+**Module responsibility boundaries preserved:**
+- `ProjectMetadata`: Stores metadata, tracks dirty state via `set_status()`, `set_name()`, `mark_dirty()`, `mark_clean()`
+- `ProjectRepository`: Persists metadata with atomic writes; unchanged
+- `ProjectService`: `change_status()` delegates to model; no GUI dependencies; preserves `_active_location`
+- `MainWindow`: Status submenu, checkable actions, dirty indicator, status-bar messages
+
+**Status behavior:**
+- All four statuses (Active, Paused, Completed, Archived) are valid
+- All transitions between any two statuses are permitted
+- Status changes mark the project dirty via `set_status()`
+- Assigning an unchanged status does not mark dirty
+- No auto-save on status change; user must explicitly save
+- No confirmation dialog for status changes
+- No restrictions on openability by status (all remain openable)
+- Archived projects can be reactivated (no deletion or invalidation)
+- No transition matrix; validation only checks membership in `VALID_STATUSES`
+
+**Verified test results (135 tests, all passing):**
+- `tests/test_project_status.py` — 21 tests (Subtask 2.1.6)
+- Total across all test files: 135 tests, 0 failures
+
+**Approved decisions preserved (not modified):**
+- D1: Desktop-first (DEC-004)
+- D2: Photometry/time-series initial capability (DEC-001)
+- D3: Initial scope boundaries (DEC-002)
+- D4: Single-user local, private-by-default, permission-aware (DEC-003)
+- D5: Technology stack Python 3.13/PySide6/NumPy/SciPy/Astropy/Matplotlib/pytest/venv (DEC-006)
+- D6: Data storage model — formal decision deferred; provisional local-file approach for first vertical slice only
+
+**Deferred requirements (recorded, not implemented):**
+- Application exit / window-close event integration (save-on-exit behavior)
+- Status filtering or searching in project discovery
+- Historical audit trail for status changes (change-history/provenance remains outside scope)
+
+**Next steps:**
+- Stage 2 review per §12.7.8 — formal review of the first useful scientific vertical slice
+- Or begin Subtask 2.2 — light-curve dataset import
+
+**Status:** Stage 2 In Progress; Task 2.1 subtasks 2.1.1–2.1.6 all complete.

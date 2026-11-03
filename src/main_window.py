@@ -7,7 +7,7 @@ projects.
 
 from __future__ import annotations
 
-from PySide6.QtGui import QAction
+from PySide6.QtGui import QAction, QActionGroup
 from PySide6.QtWidgets import (
     QMainWindow,
     QLabel,
@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
     QWidget,
     QStatusBar,
     QMessageBox,
+    QMenu,
 )
 
 from src.new_project_dialog import NewProjectDialog
@@ -51,11 +52,13 @@ class MainWindow(QMainWindow):
 
         self._save_action: QAction | None = None
         self._close_action: QAction | None = None
+        self._status_actions: dict[str, QAction] = {}
+        self._status_menu: QMenu | None = None
 
         self._setup_menu()
 
     def _setup_menu(self) -> None:
-        """Create the menu bar with Project > New, Save, Close, and Open."""
+        """Create the menu bar with Project > New, Save, Close, Open, Status."""
         project_menu = self.menuBar().addMenu("&Project")
         new_action = project_menu.addAction("&New...")
         new_action.setStatusTip("Create a new research project")
@@ -75,6 +78,24 @@ class MainWindow(QMainWindow):
         open_action.setStatusTip("Open an existing research project")
         open_action.triggered.connect(self._on_open_project)
 
+        # Status submenu
+        self._status_menu = project_menu.addMenu("&Status")
+        self._status_menu.setEnabled(False)
+
+        status_group = QActionGroup(self)
+        status_group.setExclusive(True)
+
+        for status in ("Active", "Paused", "Completed", "Archived"):
+            action = QAction(status, self)
+            action.setCheckable(True)
+            action.setEnabled(False)
+            action.triggered.connect(
+                lambda checked, s=status: self._on_change_status(s)
+            )
+            self._status_menu.addAction(action)
+            self._status_actions[status] = action
+            status_group.addAction(action)
+
     def _on_new_project(self) -> None:
         """Handle the Project > New menu action."""
         if self._service is None:
@@ -86,19 +107,27 @@ class MainWindow(QMainWindow):
         dialog = NewProjectDialog(
             default_location=self._service.default_location, parent=self
         )
-        if dialog.exec():
-            name = dialog.project_name()
-            location = dialog.project_location() or None
-            try:
-                metadata = self._service.create_project(name, location)
-                self.set_active_project(metadata.name)
-                self._status_bar.showMessage(
-                    f"Project '{metadata.name}' created", 5000
-                )
-            except Exception as exc:  # noqa: BLE001 - UI boundary: show any error
-                QMessageBox.critical(
-                    self, "Project Creation Failed", str(exc)
-                )
+        if not dialog.exec():
+            return
+
+        name = dialog.project_name()
+        location = dialog.project_location() or None
+
+        # Prompt for unsaved changes before switching projects
+        if not self._prompt_save_before_switch():
+            return
+
+        try:
+            metadata = self._service.create_project(name, location)
+            self.set_active_project(metadata.name)
+            self._update_status_menu()
+            self._status_bar.showMessage(
+                f"Project '{metadata.name}' created", 5000
+            )
+        except Exception as exc:  # noqa: BLE001 - UI boundary: show any error
+            QMessageBox.critical(
+                self, "Project Creation Failed", str(exc)
+            )
 
     def _on_open_project(self) -> None:
         """Handle the Project > Open menu action."""
@@ -119,6 +148,10 @@ class MainWindow(QMainWindow):
         if not dialog.exec():
             return
 
+        # Prompt for unsaved changes before switching projects
+        if not self._prompt_save_before_switch():
+            return
+
         # Custom location chosen
         custom_location = dialog.custom_location()
         if custom_location:
@@ -127,6 +160,7 @@ class MainWindow(QMainWindow):
                     custom_location
                 )
                 self.set_active_project(metadata.name)
+                self._update_status_menu()
                 self._status_bar.showMessage(
                     f"Project '{metadata.name}' opened", 5000
                 )
@@ -142,6 +176,7 @@ class MainWindow(QMainWindow):
             try:
                 metadata = self._service.open_project(project_id)
                 self.set_active_project(metadata.name)
+                self._update_status_menu()
                 self._status_bar.showMessage(
                     f"Project '{metadata.name}' opened", 5000
                 )
@@ -149,6 +184,48 @@ class MainWindow(QMainWindow):
                 QMessageBox.critical(
                     self, "Project Open Failed", str(exc)
                 )
+
+    def _prompt_save_before_switch(self) -> bool:
+        """Prompt the user to save unsaved changes before switching projects.
+
+        Returns True if the switch can proceed, False if it should be
+        cancelled (user cancelled or save failed).
+        """
+        if self._service is None:
+            return True
+
+        active_project = self._service.active_project
+        if active_project is None:
+            return True
+
+        if not active_project.is_dirty:
+            return True
+
+        project_name = active_project.name
+
+        reply = QMessageBox.question(
+            self,
+            "Save Changes?",
+            f"Save changes to '{project_name}' before switching?",
+            QMessageBox.StandardButton.Save
+            | QMessageBox.StandardButton.Discard
+            | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Save,
+        )
+
+        if reply == QMessageBox.StandardButton.Cancel:
+            return False
+
+        if reply == QMessageBox.StandardButton.Save:
+            try:
+                self._service.save_project()
+            except Exception as exc:  # noqa: BLE001 - UI boundary
+                QMessageBox.critical(
+                    self, "Project Save Failed", str(exc)
+                )
+                return False
+
+        return True
 
     def _on_save_project(self) -> None:
         """Handle the Project > Save menu action."""
@@ -208,7 +285,40 @@ class MainWindow(QMainWindow):
         self._service.close_project()
         self._update_menu_state()
         self._update_dirty_indicator()
+        self._update_status_menu()
         self._status_bar.showMessage("Project closed", 5000)
+
+    def _on_change_status(self, status: str) -> None:
+        """Handle a Status submenu action selection."""
+        if self._service is None or self._service.active_project is None:
+            return
+        try:
+            self._service.change_status(status)
+            self._update_dirty_indicator()
+            self._update_status_menu()
+            self._status_bar.showMessage(
+                f"Project status changed to {status}", 5000
+            )
+        except Exception as exc:  # noqa: BLE001 - UI boundary
+            QMessageBox.critical(
+                self, "Status Change Failed", str(exc)
+            )
+
+    def _update_status_menu(self) -> None:
+        """Refresh the Status submenu checked state and enabled state."""
+        if self._status_menu is None:
+            return
+        if self._service is None or self._service.active_project is None:
+            self._status_menu.setEnabled(False)
+            for action in self._status_actions.values():
+                action.setEnabled(False)
+                action.setChecked(False)
+            return
+        self._status_menu.setEnabled(True)
+        current_status = self._service.active_project.status
+        for status, action in self._status_actions.items():
+            action.setEnabled(True)
+            action.setChecked(status == current_status)
 
     def set_active_project(self, project_name: str | None) -> None:
         """Update the active-project indicator.
@@ -227,6 +337,7 @@ class MainWindow(QMainWindow):
             self._active_label.setText("No project")
 
         self._update_menu_state()
+        self._update_status_menu()
 
     def _update_dirty_indicator(self) -> None:
         """Refresh the active-project label to reflect dirty state."""
