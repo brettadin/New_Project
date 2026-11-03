@@ -81,8 +81,29 @@ class ProjectRepository:
                 or fails validation.
             ProjectRepositoryError: if the file cannot be read.
         """
-        project_file = self.project_path(project_id)
+        return self._read_project_file(self.project_path(project_id))
 
+    @classmethod
+    def load_from_directory(cls, directory: str | Path) -> ProjectMetadata:
+        """Load and validate project metadata from a specific project directory.
+
+        Used for opening projects from custom locations outside the
+        configured default projects root. The directory must contain a
+        ``project.json`` file.
+
+        Raises:
+            ProjectNotFoundError: if ``project.json`` does not exist.
+            ProjectCorruptedError: if the file is malformed or invalid.
+            ProjectRepositoryError: if the file cannot be read.
+        """
+        return cls._read_project_file(Path(directory) / "project.json")
+
+    @staticmethod
+    def _read_project_file(project_file: Path) -> ProjectMetadata:
+        """Read and validate a project.json file.
+
+        Shared by :meth:`load` and :meth:`load_from_directory`.
+        """
         if not project_file.exists():
             raise ProjectNotFoundError(
                 f"Project metadata not found: {project_file}"
@@ -156,3 +177,45 @@ class ProjectRepository:
             if entry.is_dir() and (entry / "project.json").exists():
                 project_ids.append(entry.name)
         return sorted(project_ids)
+
+    def discover_projects(
+        self,
+    ) -> tuple[list[ProjectMetadata], list[str]]:
+        """Discover valid projects and invalid directories in the root.
+
+        Scans the projects root for subdirectories containing a
+        ``project.json`` file. Each candidate is loaded and validated.
+        Only projects with readable, valid metadata are returned.
+
+        Returns:
+            Tuple of (valid_projects, invalid_directory_names).
+            valid_projects is a list of ProjectMetadata sorted by name.
+            invalid_directory_names is a list of directory names that
+            could not be loaded as valid projects (missing, unreadable,
+            or corrupted metadata). These are not silently treated as
+            valid projects.
+
+        Raises:
+            ProjectRepositoryError: if the projects root cannot be read.
+        """
+        if not self.projects_root.exists():
+            return [], []
+
+        valid_projects: list[ProjectMetadata] = []
+        invalid_dirs: list[str] = []
+
+        for entry in self.projects_root.iterdir():
+            if not entry.is_dir():
+                continue
+            project_file = entry / "project.json"
+            if not project_file.exists():
+                invalid_dirs.append(entry.name)
+                continue
+            try:
+                metadata = self._read_project_file(project_file)
+                valid_projects.append(metadata)
+            except ProjectRepositoryError:
+                invalid_dirs.append(entry.name)
+
+        valid_projects.sort(key=lambda m: m.name)
+        return valid_projects, invalid_dirs

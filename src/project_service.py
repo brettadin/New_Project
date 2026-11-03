@@ -7,15 +7,23 @@ service layer can be tested without PySide6.
 
 from __future__ import annotations
 
+from pathlib import Path
 from unittest.mock import patch
 
 from src.config_provider import ConfigProvider
 from src.project_model import ProjectMetadata, ProjectValidationError
-from src.project_repository import ProjectRepository
+from src.project_repository import (
+    ProjectRepository,
+    ProjectRepositoryError,
+)
 
 
 class ProjectCreationError(Exception):
     """Raised when a project cannot be created."""
+
+
+class ProjectOpeningError(Exception):
+    """Raised when a project cannot be opened."""
 
 
 class ProjectService:
@@ -126,3 +134,81 @@ class ProjectService:
     def set_active_project(self, metadata: ProjectMetadata | None) -> None:
         """Set the active project (called by the UI layer)."""
         self._active_project = metadata
+
+    # ------------------------------------------------------------------
+    # Discovery
+    # ------------------------------------------------------------------
+
+    def discover_projects(
+        self, location: str | None = None
+    ) -> tuple[list[ProjectMetadata], list[str]]:
+        """Discover valid projects in the given location or default root.
+
+        Args:
+            location: Optional projects root directory. If omitted or empty,
+                the default location from the configuration provider is used.
+
+        Returns:
+            Tuple of (valid_projects, invalid_directory_names).
+            valid_projects is a list of ProjectMetadata sorted by name.
+            invalid_directory_names lists directories that could not be
+            loaded as valid projects.
+        """
+        root = location or self.default_location
+        repo = self._repository_for(root)
+        return repo.discover_projects()
+
+    # ------------------------------------------------------------------
+    # Opening
+    # ------------------------------------------------------------------
+
+    def open_project(
+        self, project_id: str, location: str | None = None
+    ) -> ProjectMetadata:
+        """Open an existing project by ID from the given location.
+
+        Loads and validates the project's metadata without modifying it.
+        Sets the loaded project as the active project.
+
+        Args:
+            project_id: The stable UUID of the project to open.
+            location: Optional projects root directory. If omitted or empty,
+                the default location from the configuration provider is used.
+
+        Returns:
+            The loaded and validated ProjectMetadata.
+
+        Raises:
+            ProjectOpeningError: if the project cannot be found or loaded.
+        """
+        root = location or self.default_location
+        repo = self._repository_for(root)
+        try:
+            metadata = repo.load(project_id)
+        except ProjectRepositoryError as exc:
+            raise ProjectOpeningError(str(exc)) from exc
+        self._active_project = metadata
+        return metadata
+
+    def open_project_from_path(self, directory: str | Path) -> ProjectMetadata:
+        """Open a project from a specific directory path (custom location).
+
+        The directory must contain a ``project.json`` file. The project's
+        metadata is loaded and validated without modifying any files.
+
+        Args:
+            directory: Path to the project directory containing
+                ``project.json``.
+
+        Returns:
+            The loaded and validated ProjectMetadata.
+
+        Raises:
+            ProjectOpeningError: if the project cannot be found or loaded.
+        """
+        try:
+            metadata = ProjectRepository.load_from_directory(directory)
+        except ProjectRepositoryError as exc:
+            raise ProjectOpeningError(str(exc)) from exc
+        self._active_project = metadata
+        return metadata
