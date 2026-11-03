@@ -1,12 +1,13 @@
 """Main application window for the astronomy research application.
 
 Provides a minimal desktop shell with an active-project indicator and
-Project > New and Project > Open menu actions for managing research
+Project > New, Save, Close, and Open menu actions for managing research
 projects.
 """
 
 from __future__ import annotations
 
+from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (
     QMainWindow,
     QLabel,
@@ -24,8 +25,9 @@ class MainWindow(QMainWindow):
     """Main application window.
 
     Shows a minimal shell with an active-project indicator that initially
-    displays "No project". Provides Project > New and Project > Open menu
-    actions for creating and opening research projects.
+    displays "No project". Provides Project > New, Save, Close, and Open
+    menu actions for creating, saving, closing, and opening research
+    projects.
     """
 
     def __init__(self, service=None, parent=None) -> None:
@@ -47,14 +49,27 @@ class MainWindow(QMainWindow):
         self._status_bar: QStatusBar = self.statusBar()
         self._status_bar.showMessage("Ready")
 
+        self._save_action: QAction | None = None
+        self._close_action: QAction | None = None
+
         self._setup_menu()
 
     def _setup_menu(self) -> None:
-        """Create the menu bar with Project > New and Project > Open."""
+        """Create the menu bar with Project > New, Save, Close, and Open."""
         project_menu = self.menuBar().addMenu("&Project")
         new_action = project_menu.addAction("&New...")
         new_action.setStatusTip("Create a new research project")
         new_action.triggered.connect(self._on_new_project)
+
+        self._save_action = project_menu.addAction("&Save")
+        self._save_action.setStatusTip("Save the active project")
+        self._save_action.triggered.connect(self._on_save_project)
+        self._save_action.setEnabled(False)
+
+        self._close_action = project_menu.addAction("&Close")
+        self._close_action.setStatusTip("Close the active project")
+        self._close_action.triggered.connect(self._on_close_project)
+        self._close_action.setEnabled(False)
 
         open_action = project_menu.addAction("&Open...")
         open_action.setStatusTip("Open an existing research project")
@@ -135,6 +150,66 @@ class MainWindow(QMainWindow):
                     self, "Project Open Failed", str(exc)
                 )
 
+    def _on_save_project(self) -> None:
+        """Handle the Project > Save menu action."""
+        if self._service is None:
+            self._status_bar.showMessage(
+                "Project service not available", 5000
+            )
+            return
+
+        try:
+            metadata = self._service.save_project()
+            self._update_dirty_indicator()
+            self._status_bar.showMessage(
+                f"Project '{metadata.name}' saved", 5000
+            )
+        except Exception as exc:  # noqa: BLE001 - UI boundary: show any error
+            QMessageBox.critical(
+                self, "Project Save Failed", str(exc)
+            )
+
+    def _on_close_project(self) -> None:
+        """Handle the Project > Close menu action."""
+        if self._service is None:
+            self._status_bar.showMessage(
+                "Project service not available", 5000
+            )
+            return
+
+        if self._service.active_project is None:
+            return
+
+        project_name = self._service.active_project.name
+
+        if self._service.active_project.is_dirty:
+            reply = QMessageBox.question(
+                self,
+                "Close Project",
+                f"Save changes to '{project_name}' before closing?",
+                QMessageBox.StandardButton.Save
+                | QMessageBox.StandardButton.Discard
+                | QMessageBox.StandardButton.Cancel,
+                QMessageBox.StandardButton.Save,
+            )
+
+            if reply == QMessageBox.StandardButton.Cancel:
+                return
+
+            if reply == QMessageBox.StandardButton.Save:
+                try:
+                    self._service.save_project()
+                except Exception as exc:  # noqa: BLE001 - UI boundary
+                    QMessageBox.critical(
+                        self, "Project Save Failed", str(exc)
+                    )
+                    return  # Do not close on save failure
+
+        self._service.close_project()
+        self._update_menu_state()
+        self._update_dirty_indicator()
+        self._status_bar.showMessage("Project closed", 5000)
+
     def set_active_project(self, project_name: str | None) -> None:
         """Update the active-project indicator.
 
@@ -143,6 +218,33 @@ class MainWindow(QMainWindow):
                 project is open.
         """
         if project_name:
-            self._active_label.setText(f"Active project: {project_name}")
+            dirty = ""
+            if self._service is not None and self._service.active_project is not None:
+                if self._service.active_project.is_dirty:
+                    dirty = " *"
+            self._active_label.setText(f"Active project: {project_name}{dirty}")
         else:
             self._active_label.setText("No project")
+
+        self._update_menu_state()
+
+    def _update_dirty_indicator(self) -> None:
+        """Refresh the active-project label to reflect dirty state."""
+        if self._service is not None and self._service.active_project is not None:
+            metadata = self._service.active_project
+            dirty = " *" if metadata.is_dirty else ""
+            self._active_label.setText(f"Active project: {metadata.name}{dirty}")
+        self._update_menu_state()
+
+    def _update_menu_state(self) -> None:
+        """Enable/disable Save and Close based on active project and dirty state."""
+        if self._service is None or self._save_action is None or self._close_action is None:
+            return
+
+        has_project = self._service.active_project is not None
+        self._close_action.setEnabled(has_project)
+
+        if has_project:
+            self._save_action.setEnabled(self._service.active_project.is_dirty)
+        else:
+            self._save_action.setEnabled(False)

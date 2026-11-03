@@ -136,6 +136,49 @@ class ProjectService:
         self._active_project = metadata
 
     # ------------------------------------------------------------------
+    # Saving
+    # ------------------------------------------------------------------
+
+    def save_project(self) -> ProjectMetadata:
+        """Save the active project's metadata through the repository.
+
+        Marks the project clean on success. Preserves dirty state on
+        failure.
+
+        Raises:
+            ProjectRepositoryError: if no active project or save fails.
+        """
+        if self._active_project is None:
+            raise ProjectRepositoryError("No active project to save.")
+
+        repo = self._default_repository or self._repository_for(
+            self.default_location
+        )
+        try:
+            repo.save(self._active_project)
+        except ProjectRepositoryError:
+            raise
+        except Exception as exc:
+            raise ProjectRepositoryError(
+                f"Failed to save project '{self._active_project.name}': {exc}"
+            ) from exc
+
+        return self._active_project
+
+    # ------------------------------------------------------------------
+    # Closing
+    # ------------------------------------------------------------------
+
+    def close_project(self) -> None:
+        """Close the active project without exiting the application.
+
+        Clears the active project. The caller should check dirty state
+        and handle user prompting (Save / Discard / Cancel) before
+        calling this method.
+        """
+        self._active_project = None
+
+    # ------------------------------------------------------------------
     # Discovery
     # ------------------------------------------------------------------
 

@@ -130,7 +130,65 @@ Chronological record of development activity. Maintained continuously as work pr
 - D6: Data storage model — formal decision deferred; provisional local-file approach for first vertical slice only
 
 **Next steps:**
-- Subtask 2.1.5 — Project saving and closing workflow
 - Subtask 2.1.6 — Project lifecycle status management
 
-**Status:** Stage 2 In Progress; Task 2.1 subtasks 2.1.1–2.1.4 complete, 2.1.5–2.1.6 pending.
+**Status:** Stage 2 In Progress; Task 2.1 subtasks 2.1.1–2.1.5 complete, 2.1.6 pending.
+
+### 2026-11-02 — Stage 2 Task 2.1 Subtask 2.1.5 (Project Save and Close) complete
+
+**Activity:** Stage 2 implementation — Subtask 2.1.5 project save and close workflow. Added explicit saving, dirty-state tracking, and project closing without exiting the application. All work performed in Build mode using the existing `.venv` (Python 3.13.9). No Foundation documents modified. No commits or pushes made.
+
+**Files created (1):**
+- `tests/test_project_save_close.py` — 21 tests covering dirty-state tracking, save/close behavior, failure handling, and UI menu state
+
+**Files modified (4):**
+- `src/project_model.py` — Added `set_name()` method that marks project dirty only when the name actually changes; unchanged values are not marked dirty
+- `src/project_service.py` — Added `save_project()` (persists active project via repository, marks clean on success, preserves dirty state on failure) and `close_project()` (clears active project; caller handles dirty-state prompting)
+- `src/main_window.py` — Added Project > Save and Project > Close menu actions; dirty-state indicator (asterisk suffix); Save/Discard/Cancel dialog for dirty close; Save disabled when no project or clean; Close disabled when no project; menu state updates on project lifecycle changes
+- `docs/MASTER_DEVELOPMENT_ROADMAP.md` — Task 2.1 subtask 2.1.5 marked Complete; 2.1.6 remains Pending
+
+**Module responsibility boundaries preserved:**
+- `ProjectMetadata`: Stores metadata, tracks dirty state via `is_dirty`, `mark_dirty()`, `mark_clean()`, `set_name()`
+- `ProjectRepository`: Persists metadata with atomic writes; unchanged from Subtask 2.1.2
+- `ProjectService`: Orchestrates save/close; no GUI dialogs or PySide6 dependency
+- `MainWindow`: GUI dialogs, menu actions, dirty indicator, Save/Discard/Cancel prompting
+
+**Dirty-state behavior:**
+- `set_name()` marks dirty only when the value actually changes
+- Assigning an unchanged value does not mark dirty
+- Successful persistence marks clean; failed persistence leaves dirty
+- No observer system or complex change-tracking infrastructure
+
+**Save behavior:**
+- Save active project metadata through existing repository (atomic writes)
+- Project not marked clean until persistence succeeds
+- On failure, active project and dirty state preserved; error displayed
+- Save disabled when no active project or project is clean
+
+**Close behavior:**
+- No active project: no action
+- Clean project: closes immediately
+- Dirty project: Save/Discard/Cancel prompt via QMessageBox
+- Save then close on Save choice; close without saving on Discard; leave active on Cancel
+- Failed save during close: project remains active and dirty; close aborted
+- Application window remains open after project close
+
+**Deferred requirement (recorded, not implemented):**
+- Application exit / window-close event integration (save-on-exit behavior) — to be addressed in a future task, not Subtask 2.1.5
+
+**Verified test results (93 tests, all passing):**
+- `tests/test_project_save_close.py` — 21 tests (Subtask 2.1.5)
+- Total across all test files: 93 tests, 0 failures
+
+**Approved decisions preserved (not modified):**
+- D1: Desktop-first (DEC-004)
+- D2: Photometry/time-series initial capability (DEC-001)
+- D3: Initial scope boundaries (DEC-002)
+- D4: Single-user local, private-by-default, permission-aware (DEC-003)
+- D5: Technology stack Python 3.13/PySide6/NumPy/SciPy/Astropy/Matplotlib/pytest/venv (DEC-006)
+- D6: Data storage model — formal decision deferred; provisional local-file approach for first vertical slice only
+
+**Next steps:**
+- Subtask 2.1.6 — Project lifecycle status management (Paused/Completed/Archived transitions)
+
+**Status:** Stage 2 In Progress; Task 2.1 subtasks 2.1.1–2.1.5 complete, 2.1.6 pending.

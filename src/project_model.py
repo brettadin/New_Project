@@ -108,6 +108,19 @@ class ProjectMetadata:
         """Mark the metadata as saved (no unsaved changes)."""
         self.is_dirty = False
 
+    def set_name(self, name: str) -> None:
+        """Change the project name and mark the project dirty.
+
+        Assigning an unchanged value does not mark the project dirty.
+        Raises :exc:`ProjectValidationError` if the name is invalid.
+        """
+        stripped = name.strip()
+        if stripped == self.name:
+            return
+        self.validate_name(stripped)
+        self.name = stripped
+        self.mark_dirty()
+
     def to_dict(self) -> dict:
         """Serialize metadata to a JSON-compatible dictionary."""
         return {
