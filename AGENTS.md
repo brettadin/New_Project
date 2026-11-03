@@ -109,3 +109,52 @@ When you are instructed to "continue working," "keep going," or similar:
 7. After completing a task, identify the next appropriate task and continue if it is within the approved scope and current mode. Do not stop merely to ask whether the user wants you to continue.
 
 8. Stop when the next task requires the user's approval, a new scope decision, unavailable information, or a change of operating mode.
+
+## Documentation Maintenance During Implementation
+
+Documentation updates are a required part of every Build-mode implementation task, not a separate documentation-only activity.
+
+### Before implementation
+
+1. Read the relevant roadmap and development records before implementation work begins:
+   - Master Development Roadmap (`docs/MASTER_DEVELOPMENT_ROADMAP.md`) — confirm current task status and dependencies.
+   - Development Log (`docs/development/DEVELOPMENT_LOG.md`) — understand recent work and context.
+2. Identify which documentation may need updating based on the authorized task (application behavior, module interfaces, architecture, data structures, persistence behavior, testing, or progress status).
+3. Respect existing architectural decisions and approval boundaries.
+
+### During implementation
+
+Update relevant documentation as part of the implementation task whenever the work changes or establishes:
+
+- Application functionality or behavior.
+- Module responsibilities or interfaces.
+- Architecture or data flow.
+- Data structures or persistence behavior.
+- Validation, testing, or quality-control behavior.
+- Development progress or task completion status.
+
+Update the appropriate existing documents rather than postponing these changes:
+
+- `docs/MASTER_DEVELOPMENT_ROADMAP.md` — reflect verified progress and current status when task statuses, milestones, or dependencies change.
+- `docs/development/DEVELOPMENT_LOG.md` — record completed work and important implementation details.
+- Architecture and module documentation — when actual architecture or responsibilities change.
+- Decision records — when an approved decision is implemented (do not change approved decisions without approval).
+- Testing and validation documentation — when testing strategy or verified behavior changes.
+
+Do not update documents merely for the sake of making changes. Avoid duplication and preserve accurate existing material. Documents not affected by the implementation do not need artificial edits.
+
+### Before reporting completion
+
+1. Compare documentation against the actual implementation. Confirm descriptions match the code and verified test results.
+2. Identify which documentation files were changed.
+3. Explain why relevant documents were intentionally left unchanged.
+4. Report any remaining documentation gaps rather than silently deferring them.
+5. Distinguish implemented, planned, deferred, and unresolved work in all status reports.
+
+### Scope and authority
+
+- Documentation updates must remain within the authorized implementation scope.
+- Do not change approved architectural decisions without approval.
+- Do not turn planned functionality into documented implemented functionality.
+- Foundation documents remain read-only unless explicitly authorized.
+- Do not commit or push documentation changes.

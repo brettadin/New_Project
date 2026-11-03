@@ -77,3 +77,60 @@ Chronological record of development activity. Maintained continuously as work pr
 - Empirical UQ-009 calibration during Stage 2 validation activity (not an entry blocker)
 
 **Status:** Stage 1 research complete. Stage 2 ready to begin (D5 approved with delegation; PySide6 selected by OpenCode).
+
+### 2026-11-02 — Stage 2 Task 2.1 (Project Lifecycle) — Subtasks 2.1.1–2.1.4 complete
+
+**Activity:** Stage 2 implementation — Project Lifecycle. Created the minimal desktop application shell and project lifecycle capability for creating, discovering, opening, saving, and closing research projects. All work performed in Build mode using the existing `.venv` (Python 3.13.9). No Foundation documents modified. No commits or pushes made.
+
+**Files created (9):**
+- `src/__init__.py` — Application package marker (§11.4.9)
+- `src/project_model.py` — `ProjectMetadata` dataclass with UUID generation, name validation, dirty-state tracking, JSON serialization/deserialization (§6.4.2, §4.7)
+- `src/main_window.py` — PySide6 `QMainWindow` with active-project indicator ("No project" initially); `Project > New` and `Project > Open` menu actions (§6.1, §6.4)
+- `src/main.py` — Application entry point; wires up `ConfigProvider`, `ProjectRepository`, `ProjectService` (§9.2)
+- `src/config_provider.py` — Projects root resolution: `ASTRONOMY_PROJECTS_ROOT` env var > config file > default `%USERPROFILE%\Documents\AstronomyProjects` (§9.4.4)
+- `src/project_repository.py` — JSON persistence with atomic writes (`project.json` per project directory); `discover_projects()` for default-root scanning; `load_from_directory()` for custom locations; error classes (`ProjectNotFoundError`, `ProjectCorruptedError`, `ProjectRepositoryError`) (§9.4.2, §9.4.5, §9.4.6)
+- `src/project_service.py` — `ProjectService` coordinating creation, discovery, opening, active-project tracking, and failure cleanup; `ProjectCreationError` and `ProjectOpeningError` exceptions (§6.4.10, §5.1.4)
+- `src/new_project_dialog.py` — PySide6 dialog for project creation with name validation and location picker (§6.4.2)
+- `src/open_project_dialog.py` — PySide6 dialog for project selection from discovered list or custom folder (§6.4.10)
+
+**Files modified (3):**
+- `AGENTS.md` — Added "Documentation Maintenance During Implementation" section requiring documentation updates during Build-mode tasks
+- `docs/MASTER_DEVELOPMENT_ROADMAP.md` — Stage 2 status changed from "Pending" to "In Progress"; Task 2.1 subtask breakdown added
+- `docs/development/DEVELOPMENT_LOG.md` — This rolling development record
+
+**Module responsibilities:**
+- `project_model.py`: Pure data model — metadata fields (`project_id`, `name`, `created_at`, `status`, `schema_version`, `external_data_references`), validation, serialization
+- `project_repository.py`: Persistence layer — read/write `project.json`, atomic writes, discovery scanning, directory queries
+- `project_service.py`: Lifecycle orchestration — create/open/save/close/discover, active-project tracking, failure cleanup
+- `main_window.py`: PySide6 UI shell — active-project indicator, New/Open menu actions
+- `config_provider.py`: Configuration — projects root location resolution
+- `main.py`: Entry point — bootstraps Qt application and wires components
+
+**Architecture decisions:**
+- Provisional local-file persistence (D6 remains deferred — not a permanent storage architecture)
+- Project directory named by stable `project_id` (UUID); human-readable `name` can change without moving files
+- Original external data files referenced by path, never copied or modified
+- Atomic writes via temp file + `os.replace` to protect against interrupted saves
+- `schema_version` distinct from application version; describes `project.json` metadata format version
+
+**Verified test results (73 tests, all passing):**
+- `tests/test_project_model.py` — 12 tests (Subtask 2.1.1)
+- `tests/test_project_repository.py` — 14 tests (Subtask 2.1.2)
+- `tests/test_project_service.py` — 10 tests (Subtask 2.1.3)
+- `tests/test_new_project_dialog.py` — 10 tests (Subtask 2.1.3)
+- `tests/test_project_discovery.py` — 27 tests (Subtask 2.1.4)
+- Total: 73 tests, 0 failures
+
+**Approved decisions preserved (not modified):**
+- D1: Desktop-first (DEC-004)
+- D2: Photometry/time-series initial capability (DEC-001)
+- D3: Initial scope boundaries (DEC-002)
+- D4: Single-user local, private-by-default, permission-aware (DEC-003)
+- D5: Technology stack Python 3.13/PySide6/NumPy/SciPy/Astropy/Matplotlib/pytest/venv (DEC-006)
+- D6: Data storage model — formal decision deferred; provisional local-file approach for first vertical slice only
+
+**Next steps:**
+- Subtask 2.1.5 — Project saving and closing workflow
+- Subtask 2.1.6 — Project lifecycle status management
+
+**Status:** Stage 2 In Progress; Task 2.1 subtasks 2.1.1–2.1.4 complete, 2.1.5–2.1.6 pending.
