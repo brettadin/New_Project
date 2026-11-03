@@ -1,0 +1,1 @@
+"""Astronomy research application package."""
