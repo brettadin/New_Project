@@ -359,24 +359,26 @@ These two tests encode the pre-change schema version and are in `tests/test_proj
 
 **Files created (2):**
 - `src/fits_importer.py` — `FITSImportError` exception and `import_light_curve(file_path)` function. Reads FITS files read-only, identifies the light-curve table structurally (not by fixed HDU index), extracts supported measurements (`TIME`, `SAP_FLUX`, `PDCSAP_FLUX`, `SAP_FLUX_ERR`, `PDCSAP_FLUX_ERR`, `SAP_QUALITY`, `CADENCENO`), preserves scientific metadata, validates contents, and constructs `LightCurveDataset` from Subtask 2.2.1.
-- `tests/test_fits_importer.py` — 46 focused unit tests using temporary FITS fixtures under pytest `tmp_path`.
+- `tests/test_fits_importer.py` — 60 focused unit tests using temporary FITS fixtures under pytest `tmp_path`.
 
 **Module responsibilities:**
 - `fits_importer.py`: Pure FITS import logic — file opening, HDU identification, column extraction, metadata mapping, unit compatibility validation, validation findings, dataset construction. No PySide6, no project/service/repository imports, no database, no persistence.
 
 **Key implementation details:**
 - Structural HDU identification: candidates must contain `TIME` and at least one of `SAP_FLUX`/`PDCSAP_FLUX`. Prefer `EXTNAME=LIGHTCURVE` among valid candidates; otherwise first in HDU order. Multiple candidates → informational finding.
+- Duplicate supported column detection: checks `selected_hdu.columns.names` (preserves original `TTYPE` definitions including duplicates) before any name-based data or metadata extraction. Raises `FITSImportError` on duplicates.
 - Extension header metadata read from `selected_hdu.header` (not fixed `hdul[1]`). Primary header provides source metadata; extension header provides time metadata. Application-level fallback for source metadata is documented and independent of FITS `INHERIT`.
-- Unit policy: flux and uncertainty units read independently; compatibility enforced before column construction (both present & identical → import; both blank → import with `unit=""`; only one present → `FITSImportError`; both present but different → `FITSImportError`). `MeasurementColumn.unit` holds the flux unit only — no separate uncertainty-unit field.
-- Time metadata: `TIMEUNIT` → `TimeInfo.unit`; descriptive `TUNIT1` → `TimeInfo.reference`; `TIMESYS` → time scale; `TIMEREF` → reference frame; `BJDREFI`/`BJDREFF` → reference value. No BKJD→JD conversion.
+- Unit policy: flux and uncertainty units read independently by column name; compatibility enforced before column construction (both present & identical → import; both blank → import with `unit=""`; only one present → `FITSImportError`; both present but different → `FITSImportError`). Whitespace trimmed before comparison; original nonblank flux unit string preserved. `MeasurementColumn.unit` holds the flux unit only — no separate uncertainty-unit field.
+- Numeric dtype validation: source dtype checked before conversion; string/object types rejected; numeric-looking strings rejected. Integer range checked against `np.iinfo(np.int64)` before conversion; overflow rejected with `FITSImportError`.
+- Time metadata: `TIMEUNIT` → `TimeInfo.unit`; descriptive `TUNITn` → `TimeInfo.reference`; `TIMESYS` → time scale; `TIMEREF` → reference frame; `BJDREFI`/`BJDREFF` → reference value (missing component treated as zero). No BKJD→JD conversion. `TIMEDEL` not mapped to `resolution` (remains `None`).
 - Integer `TNULL` policy: sentinel declared but unused → import normally; sentinel present in data → `FITSImportError`.
-- Validation findings: non-finite values (warning), negative uncertainties (warning), duplicate times (warning), non-monotonic times (warning), nonzero quality flags (info, no filtering), orphan uncertainties (warning), missing time unit (info).
+- Validation findings: non-finite values (warning), negative uncertainties (warning), duplicate times (warning), non-monotonic times (warning, strictly decreasing only), nonzero quality flags (info, no filtering), orphan uncertainties (warning), missing time unit (info).
 - All arrays copied before FITS file close; memory-mapped data safely handled.
 
-**Verified test results (46 tests, all passing):**
-- `tests/test_fits_importer.py` — 46 tests (Subtask 2.2.2), 0 failures.
+**Verified test results (60 tests, all passing):**
+- `tests/test_fits_importer.py` — 60 tests (Subtask 2.2.2), 0 failures.
 
-**Full non-GUI test suite:** 219 passed, 0 failed (includes 46 new importer tests + all existing project and model tests). Two GUI test files (`test_new_project_dialog.py`, `test_project_save_close.py`) hang in this environment due to PySide6 display requirements — pre-existing issue unrelated to this task.
+**Full non-GUI test suite:** 233 passed, 0 failed (includes 60 new importer tests + all existing project and model tests). Two GUI test files (`test_new_project_dialog.py`, `test_project_save_close.py`) hang in this environment due to PySide6 display requirements — pre-existing issue unrelated to this task.
 
 **Approved decisions preserved (not modified):** D1–D6 as recorded previously.
 

@@ -595,7 +595,7 @@ def test_metadata_from_primary_and_extension_headers(tmp_path):
             "BJDREFF": 0.0,
             "TSTART": 10.0,
             "TSTOP": 20.0,
-            "TIMEDEL": 0.5,
+            # TIMEDEL is intentionally not mapped to resolution in this subtask.
         },
     )
 
@@ -612,7 +612,7 @@ def test_metadata_from_primary_and_extension_headers(tmp_path):
     assert dataset.time.reference_value == 2454833.0
     assert dataset.time.start == 10.0
     assert dataset.time.stop == 20.0
-    assert dataset.time.resolution == 0.5
+    assert dataset.time.resolution is None
 
 
 # ------------------------------------------------------------------
@@ -1193,6 +1193,463 @@ def test_tnull_sentinel_present_in_data(tmp_path):
 
     with pytest.raises(FITSImportError):
         import_light_curve(path)
+
+
+# ------------------------------------------------------------------
+# Unit comparison: whitespace handling
+# ------------------------------------------------------------------
+
+
+def test_unit_comparison_trims_whitespace(tmp_path):
+    """Flux unit "e-/s" and uncertainty unit " e-/s " are equivalent after trimming."""
+    n = 3
+    time_vals = np.arange(n, dtype=np.float64)
+    sap_vals = np.array([100.0, 200.0, 300.0], dtype=np.float32)
+    sap_err = np.array([1.0, 2.0, 3.0], dtype=np.float32)
+
+    path = _write_fits_file(
+        tmp_path,
+        "whitespace_units.fits",
+        time_vals,
+        [
+            _flux_col("SAP_FLUX", sap_vals, unit="e-/s"),
+            _flux_col("SAP_FLUX_ERR", sap_err, unit=" e-/s "),
+        ],
+        ext_header={"TIMEUNIT": "d"},
+    )
+
+    dataset = import_light_curve(path)
+    sap = dataset.measurements.series["SAP_FLUX"]
+    # Original nonblank flux unit string is preserved, not the trimmed version.
+    assert sap.unit == "e-/s"
+    assert sap.uncertainties is not None
+
+
+def test_unit_comparison_different_after_trim(tmp_path):
+    """Flux unit "e-/s" and uncertainty unit "electron/s" are incompatible."""
+    n = 3
+    time_vals = np.arange(n, dtype=np.float64)
+    sap_vals = np.array([100.0, 200.0, 300.0], dtype=np.float32)
+    sap_err = np.array([1.0, 2.0, 3.0], dtype=np.float32)
+
+    path = _write_fits_file(
+        tmp_path,
+        "diff_units.fits",
+        time_vals,
+        [
+            _flux_col("SAP_FLUX", sap_vals, unit="e-/s"),
+            _flux_col("SAP_FLUX_ERR", sap_err, unit="electron/s"),
+        ],
+        ext_header={"TIMEUNIT": "d"},
+    )
+
+    with pytest.raises(FITSImportError):
+        import_light_curve(path)
+
+
+# ------------------------------------------------------------------
+# Numeric dtype: numeric-looking strings rejected
+# ------------------------------------------------------------------
+
+
+def test_numeric_string_column_rejected(tmp_path):
+    """A string column whose contents parse as numbers is still rejected."""
+    n = 3
+    time_vals = np.arange(n, dtype=np.float64)
+    primary = fits.PrimaryHDU()
+    cols = [
+        fits.Column(name="TIME", format="D", array=time_vals),
+        fits.Column(
+            name="SAP_FLUX",
+            format="20A",
+            array=np.array(["1.0", "2.0", "3.0"]),
+        ),
+    ]
+    hdu = fits.BinTableHDU.from_columns(cols)
+    hdu.header["EXTNAME"] = "LIGHTCURVE"
+    hdu.header["TIMEUNIT"] = "d"
+    hdul = fits.HDUList([primary, hdu])
+    path = tmp_path / "numeric_string_flux.fits"
+    hdul.writeto(path)
+
+    with pytest.raises(FITSImportError):
+        import_light_curve(path)
+
+
+# ------------------------------------------------------------------
+# Integer overflow protection (unsigned 64-bit via TZERO)
+# ------------------------------------------------------------------
+
+
+def _write_uint64_fits_file(
+    tmp_path: Path,
+    filename: str,
+    time_values: np.ndarray,
+    cadence_values: np.ndarray,
+    tzero: int | None = None,
+) -> Path:
+    """Write a FITS file with a 64-bit integer CADENCENO column.
+
+    Uses format K (signed 64-bit) with optional TZERO = 2**63 to represent
+    unsigned 64-bit values per the FITS unsigned-integer convention.
+    """
+    ph = fits.PrimaryHDU()
+    ph.header["SIMPLE"] = True
+    ph.header["BITPIX"] = 8
+    ph.header["NAXIS"] = 0
+    ph.header["EXTEND"] = True
+
+    th = fits.Header()
+    th["XTENSION"] = ("BINTABLE", "binary table extension")
+    th["BITPIX"] = (8, "array data type")
+    th["NAXIS"] = (2, "number of array dimensions")
+    th["NAXIS1"] = (16, "length of first array dimension")
+    th["NAXIS2"] = (len(time_values), "length of second array dimension")
+    th["PCOUNT"] = (0, "group parameter count")
+    th["GCOUNT"] = (1, "group count")
+    th["TFIELDS"] = (2, "number of table fields")
+    th["TTYPE1"] = ("TIME", "column title")
+    th["TFORM1"] = ("1D", "column format")
+    th["TTYPE2"] = ("CADENCENO", "column title")
+    th["TFORM2"] = ("1K", "column format")
+    if tzero is not None:
+        th["TZERO2"] = (tzero, "unsigned integer offset")
+
+    primary_bytes = ph.header.tostring().encode("ascii")
+    primary_padded = primary_bytes + b" " * (2880 - len(primary_bytes))
+
+    table_header_bytes = th.tostring().encode("ascii")
+    table_header_padded = table_header_bytes + b" " * (2880 - len(table_header_bytes))
+
+    import struct as _struct
+
+    rows = b""
+    for t, c in zip(time_values, cadence_values):
+        rows += _struct.pack("<d", t) + _struct.pack("<q", c)
+    data_bytes = rows
+    data_padded = data_bytes + b"\x00" * (2880 - len(data_bytes))
+
+    full_file = primary_padded + table_header_padded + data_padded
+
+    from io import BytesIO as _BytesIO
+
+    buf = _BytesIO(full_file)
+    with fits.open(buf) as hdul:
+        # Re-write to a proper file via astropy
+        tmp_hdul = fits.HDUList([fits.PrimaryHDU(), hdul[1].copy()])
+        filepath = tmp_path / filename
+        tmp_hdul.writeto(filepath)
+    return filepath
+
+
+def test_int64_max_accepted(tmp_path):
+    """The largest valid int64 value is accepted."""
+    n = 2
+    time_vals = np.arange(n, dtype=np.float64)
+    sap_vals = np.array([100.0, 200.0], dtype=np.float32)
+    max_i64 = np.iinfo(np.int64).max
+    cadence = np.array([max_i64, max_i64 - 1], dtype=np.int64)
+
+    primary = fits.PrimaryHDU()
+    cols = [
+        fits.Column(name="TIME", format="D", array=time_vals),
+        fits.Column(name="SAP_FLUX", format="E", array=sap_vals),
+        fits.Column(name="CADENCENO", format="K", array=cadence),
+    ]
+    hdu = fits.BinTableHDU.from_columns(cols)
+    hdu.header["EXTNAME"] = "LIGHTCURVE"
+    hdu.header["TIMEUNIT"] = "d"
+    hdul = fits.HDUList([primary, hdu])
+    path = tmp_path / "int64_max.fits"
+    hdul.writeto(path)
+
+    dataset = import_light_curve(path)
+    assert dataset.cadence_numbers is not None
+    assert dataset.cadence_numbers[0] == max_i64
+
+
+def test_unsigned_int64_overflow_rejected(tmp_path):
+    """An unsigned 64-bit value above int64 max (via TZERO=2**63) is rejected."""
+    n = 2
+    time_vals = np.arange(n, dtype=np.float64)
+    sap_vals = np.array([100.0, 200.0], dtype=np.float32)
+    # Raw value 0 with TZERO=2**63 represents unsigned 2**63, which exceeds int64 max.
+    cadence_raw = np.array([0, 0], dtype=np.int64)
+
+    path = _write_uint64_fits_file(
+        tmp_path,
+        "uint64_overflow.fits",
+        time_vals,
+        cadence_raw,
+        tzero=2**63,
+    )
+
+    with pytest.raises(FITSImportError):
+        import_light_curve(path)
+
+
+# ------------------------------------------------------------------
+# Duplicate supported column names (raw FITS fixture)
+# ------------------------------------------------------------------
+
+
+def test_duplicate_supported_column_names_rejected(tmp_path):
+    """A table with duplicate TTYPE for a supported column is rejected."""
+    import struct as _struct
+
+    ph = fits.PrimaryHDU()
+    ph.header["SIMPLE"] = True
+    ph.header["BITPIX"] = 8
+    ph.header["NAXIS"] = 0
+    ph.header["EXTEND"] = True
+
+    th = fits.Header()
+    th["XTENSION"] = ("BINTABLE", "binary table extension")
+    th["BITPIX"] = (8, "array data type")
+    th["NAXIS"] = (2, "number of array dimensions")
+    th["NAXIS1"] = (16, "length of first array dimension")
+    th["NAXIS2"] = (2, "length of second array dimension")
+    th["PCOUNT"] = (0, "group parameter count")
+    th["GCOUNT"] = (1, "group count")
+    th["TFIELDS"] = (3, "number of table fields")
+    th["TTYPE1"] = ("TIME", "column title")
+    th["TFORM1"] = ("1D", "column format")
+    th["TTYPE2"] = ("SAP_FLUX", "column title")
+    th["TFORM2"] = ("1E", "column format")
+    th["TTYPE3"] = ("SAP_FLUX", "column title duplicate")
+    th["TFORM3"] = ("1E", "column format")
+
+    primary_bytes = ph.header.tostring().encode("ascii")
+    primary_padded = primary_bytes + b" " * (2880 - len(primary_bytes))
+
+    table_header_bytes = th.tostring().encode("ascii")
+    table_header_padded = table_header_bytes + b" " * (2880 - len(table_header_bytes))
+
+    row1 = _struct.pack("<d", 1.0) + _struct.pack("<f", 100.0) + _struct.pack("<f", 200.0)
+    row2 = _struct.pack("<d", 2.0) + _struct.pack("<f", 300.0) + _struct.pack("<f", 400.0)
+    data_bytes = row1 + row2
+    data_padded = data_bytes + b"\x00" * (2880 - len(data_bytes))
+
+    full_file = primary_padded + table_header_padded + data_padded
+
+    filepath = tmp_path / "duplicate_columns.fits"
+    filepath.write_bytes(full_file)
+
+    with pytest.raises(FITSImportError):
+        import_light_curve(filepath)
+
+
+# ------------------------------------------------------------------
+# Column-position independence
+# ------------------------------------------------------------------
+
+
+def test_column_position_independence(tmp_path):
+    """Units and measurements are mapped by column name, not position."""
+    n = 3
+    time_vals = np.arange(n, dtype=np.float64)
+    sap_vals = np.array([100.0, 200.0, 300.0], dtype=np.float32)
+    sap_err = np.array([1.0, 2.0, 3.0], dtype=np.float32)
+    pdc_vals = np.array([101.0, 201.0, 301.0], dtype=np.float32)
+    pdc_err = np.array([1.1, 2.1, 3.1], dtype=np.float32)
+
+    # PDCSAP columns come before SAP columns (different order than Kepler).
+    path = _write_fits_file(
+        tmp_path,
+        "reordered.fits",
+        time_vals,
+        [
+            _flux_col("PDCSAP_FLUX", pdc_vals, unit="e-/s"),
+            _flux_col("PDCSAP_FLUX_ERR", pdc_err, unit="e-/s"),
+            _flux_col("SAP_FLUX", sap_vals, unit="e-/s"),
+            _flux_col("SAP_FLUX_ERR", sap_err, unit="e-/s"),
+        ],
+        ext_header={"TIMEUNIT": "d"},
+    )
+
+    dataset = import_light_curve(path)
+    assert "SAP_FLUX" in dataset.measurements.series
+    assert "PDCSAP_FLUX" in dataset.measurements.series
+    assert np.array_equal(
+        dataset.measurements.series["SAP_FLUX"].values, sap_vals.astype(np.float64)
+    )
+    assert np.array_equal(
+        dataset.measurements.series["PDCSAP_FLUX"].values, pdc_vals.astype(np.float64)
+    )
+    assert np.array_equal(
+        dataset.measurements.series["SAP_FLUX"].uncertainties, sap_err.astype(np.float64)
+    )
+    assert np.array_equal(
+        dataset.measurements.series["PDCSAP_FLUX"].uncertainties, pdc_err.astype(np.float64)
+    )
+    assert dataset.measurements.series["SAP_FLUX"].unit == "e-/s"
+    assert dataset.measurements.series["PDCSAP_FLUX"].unit == "e-/s"
+
+
+# ------------------------------------------------------------------
+# TNULL at non-index-1 HDU
+# ------------------------------------------------------------------
+
+
+def test_tnull_at_non_index_1_hdu(tmp_path):
+    """TNULL sentinel in an integer column at HDU index 2 is rejected."""
+    n = 3
+    time_vals = np.arange(n, dtype=np.float64)
+    sap_vals = np.array([100.0, 200.0, 300.0], dtype=np.float32)
+    quality = np.array([0, -999, 0], dtype=np.int32)  # -999 is the TNULL sentinel
+
+    # Insert an unrelated image HDU at index 1
+    image_hdu = fits.ImageHDU(data=np.zeros((2, 2), dtype=np.float32))
+
+    # Build table HDU with TNULL sentinel on SAP_QUALITY using fits.Column
+    cols = [
+        fits.Column(name="TIME", format="D", array=time_vals),
+        fits.Column(name="SAP_FLUX", format="E", array=sap_vals),
+        fits.Column(name="SAP_QUALITY", format="J", array=quality, null=-999),
+    ]
+    table_hdu = fits.BinTableHDU.from_columns(cols)
+    table_hdu.header["EXTNAME"] = "LIGHTCURVE"
+    table_hdu.header["TIMEUNIT"] = "d"
+
+    # Write primary + table, then insert image at index 1
+    ph = fits.PrimaryHDU()
+    hdul = fits.HDUList([ph, table_hdu])
+    filepath_raw = tmp_path / "tnull_raw.fits"
+    hdul.writeto(filepath_raw)
+
+    filepath = tmp_path / "tnull_not_index1.fits"
+    with fits.open(filepath_raw) as hdul2:
+        hdul2.insert(1, image_hdu)
+        hdul2.writeto(filepath)
+
+    with pytest.raises(FITSImportError):
+        import_light_curve(filepath)
+
+
+# ------------------------------------------------------------------
+# Partial BJD reference metadata
+# ------------------------------------------------------------------
+
+
+def test_bjdref_both_components(tmp_path):
+    n = 2
+    time_vals = np.arange(n, dtype=np.float64)
+    sap_vals = np.array([100.0, 200.0], dtype=np.float32)
+
+    path = _write_fits_file(
+        tmp_path,
+        "bjd_both.fits",
+        time_vals,
+        [_flux_col("SAP_FLUX", sap_vals)],
+        ext_header={"TIMEUNIT": "d", "BJDREFI": 2454833, "BJDREFF": 0.5},
+    )
+
+    dataset = import_light_curve(path)
+    assert dataset.time.reference_value == 2454833.5
+
+
+def test_bjdref_only_fifi(tmp_path):
+    """Only BJDREFI present: missing BJDREFF treated as zero."""
+    n = 2
+    time_vals = np.arange(n, dtype=np.float64)
+    sap_vals = np.array([100.0, 200.0], dtype=np.float32)
+
+    path = _write_fits_file(
+        tmp_path,
+        "bjd_only_fifi.fits",
+        time_vals,
+        [_flux_col("SAP_FLUX", sap_vals)],
+        ext_header={"TIMEUNIT": "d", "BJDREFI": 2454833},
+    )
+
+    dataset = import_light_curve(path)
+    assert dataset.time.reference_value == 2454833.0
+
+
+def test_bjdref_only_ffif(tmp_path):
+    """Only BJDREFF present: missing BJDREFI treated as zero."""
+    n = 2
+    time_vals = np.arange(n, dtype=np.float64)
+    sap_vals = np.array([100.0, 200.0], dtype=np.float32)
+
+    path = _write_fits_file(
+        tmp_path,
+        "bjd_only_ffif.fits",
+        time_vals,
+        [_flux_col("SAP_FLUX", sap_vals)],
+        ext_header={"TIMEUNIT": "d", "BJDREFF": 0.5},
+    )
+
+    dataset = import_light_curve(path)
+    assert dataset.time.reference_value == 0.5
+
+
+def test_bjdref_neither(tmp_path):
+    """Neither BJDREFI nor BJDREFF present: reference_value is None."""
+    n = 2
+    time_vals = np.arange(n, dtype=np.float64)
+    sap_vals = np.array([100.0, 200.0], dtype=np.float32)
+
+    path = _write_fits_file(
+        tmp_path,
+        "bjd_neither.fits",
+        time_vals,
+        [_flux_col("SAP_FLUX", sap_vals)],
+        ext_header={"TIMEUNIT": "d"},
+    )
+
+    dataset = import_light_curve(path)
+    assert dataset.time.reference_value is None
+
+
+# ------------------------------------------------------------------
+# Duplicate vs non-monotonic timestamps
+# ------------------------------------------------------------------
+
+
+def test_duplicate_times_non_adjacent(tmp_path):
+    """Duplicate timestamps at non-adjacent positions: duplicate warning plus
+    non-monotonic warning because 100 at index 2 is less than 101 at index 1."""
+    n = 5
+    time_vals = np.array([100.0, 101.0, 100.0, 102.0, 103.0], dtype=np.float64)
+    sap_vals = np.array([100.0, 200.0, 300.0, 400.0, 500.0], dtype=np.float32)
+
+    path = _write_fits_file(
+        tmp_path,
+        "dup_nonadj.fits",
+        time_vals,
+        [_flux_col("SAP_FLUX", sap_vals)],
+        ext_header={"TIMEUNIT": "d"},
+    )
+
+    dataset = import_light_curve(path)
+    assert np.array_equal(dataset.time.values, time_vals)
+
+    warning_codes = [f.code for f in dataset.validation.warnings]
+    assert "DUPLICATE_TIME" in warning_codes
+    assert "NONMONOTONIC_TIME" in warning_codes
+
+
+def test_duplicates_and_decreasing_times(tmp_path):
+    """Both duplicate and decreasing timestamps produce both warnings."""
+    n = 5
+    time_vals = np.array([100.0, 100.0, 99.0, 101.0, 102.0], dtype=np.float64)
+    sap_vals = np.array([100.0, 200.0, 300.0, 400.0, 500.0], dtype=np.float32)
+
+    path = _write_fits_file(
+        tmp_path,
+        "dup_and_decreasing.fits",
+        time_vals,
+        [_flux_col("SAP_FLUX", sap_vals)],
+        ext_header={"TIMEUNIT": "d"},
+    )
+
+    dataset = import_light_curve(path)
+    assert np.array_equal(dataset.time.values, time_vals)
+
+    warning_codes = [f.code for f in dataset.validation.warnings]
+    assert "DUPLICATE_TIME" in warning_codes
+    assert "NONMONOTONIC_TIME" in warning_codes
 
 
 # ------------------------------------------------------------------

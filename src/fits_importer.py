@@ -109,6 +109,10 @@ def _import_from_hdul(hdul: fits.HDUList, path: Path) -> LightCurveDataset:
     # Step 2: Select the HDU using the multiple-candidate policy.
     selected_hdu, ambiguity_finding = _select_hdu(candidates, path)
 
+    # Step 2.5: Reject duplicate supported column names before any
+    # name-based data or metadata lookup.
+    _check_duplicate_columns(selected_hdu, path)
+
     # Step 3: Get references to headers and table data.
     table_data = selected_hdu.data
     ext_header = selected_hdu.header
@@ -174,9 +178,7 @@ def _find_light_curve_candidates(hdul: fits.HDUList) -> list[tuple[int, Any]]:
     for idx, hdu in enumerate(hdul):
         if not isinstance(hdu, (fits.BinTableHDU, fits.TableHDU)):
             continue
-        if hdu.data is None:
-            continue
-        col_names = hdu.data.dtype.names
+        col_names = hdu.columns.names
         if col_names is None:
             continue
         col_set = set(col_names)
@@ -238,6 +240,37 @@ def _get_extname(hdu: Any) -> str | None:
     return str(value)
 
 
+def _check_duplicate_columns(hdu: Any, path: Path) -> None:
+    """Reject duplicate supported column names before name-based lookup.
+
+    Inspects ``selected_hdu.columns.names`` which preserves the original
+    FITS ``TTYPE`` definitions including duplicates. Accessing
+    ``table_data.dtype.names`` or ``table_data[name]`` with duplicate
+    column names raises ``ValueError`` from Astropy, so the duplicate
+    check must happen first using ``columns.names``.
+    """
+    supported = {
+        "TIME",
+        "SAP_FLUX",
+        "PDCSAP_FLUX",
+        "SAP_FLUX_ERR",
+        "PDCSAP_FLUX_ERR",
+        "SAP_QUALITY",
+        "CADENCENO",
+    }
+    col_names = list(hdu.columns.names)
+    seen: set[str] = set()
+    for name in col_names:
+        if name in supported:
+            if name in seen:
+                raise FITSImportError(
+                    f"Duplicate supported column name '{name}' in '{path}'. "
+                    "Duplicate column definitions prevent unambiguous "
+                    "data extraction."
+                )
+            seen.add(name)
+
+
 def _get_header_string(header: fits.Header, keyword: str, default: str = "") -> str:
     """Get a string value from a FITS header, or default if absent/undefined."""
     value = header.get(keyword)
@@ -277,7 +310,7 @@ def _extract_time(
     """
     findings: dict[str, list[ValidationFinding]] = {"warnings": [], "info": []}
 
-    if "TIME" not in table_data.dtype.names:
+    if "TIME" not in selected_hdu.columns.names:
         raise FITSImportError(
             f"Required column 'TIME' is absent from the light-curve table in "
             f"'{path}'."
@@ -333,7 +366,7 @@ def _extract_time(
     # Report non-monotonic timestamps as a warning; preserve order.
     if len(time_values) > 1:
         diffs = np.diff(time_values)
-        non_monotonic_rows = np.where(diffs <= 0)[0] + 1
+        non_monotonic_rows = np.where(diffs < 0)[0] + 1
         if len(non_monotonic_rows) > 0:
             findings["warnings"].append(
                 ValidationFinding(
@@ -358,12 +391,15 @@ def _extract_time(
     time_frame = _get_header_string(ext_header, "TIMEREF", "")
 
     # Numeric reference offset from BJDREFI and BJDREFF.
+    # A missing component is treated as zero (per the approved plan).
     reference_value: float | None = None
     bjdref_i = ext_header.get("BJDREFI")
-    bjdref_f = ext_header.get("BJDREFF", 0.0)
-    if bjdref_i is not None:
+    bjdref_f = ext_header.get("BJDREFF")
+    if bjdref_i is not None or bjdref_f is not None:
         try:
-            reference_value = float(bjdref_i) + float(bjdref_f)
+            ref_i = float(bjdref_i) if bjdref_i is not None else 0.0
+            ref_f = float(bjdref_f) if bjdref_f is not None else 0.0
+            reference_value = ref_i + ref_f
         except (TypeError, ValueError):
             reference_value = None
 
@@ -381,12 +417,8 @@ def _extract_time(
         except (TypeError, ValueError):
             stop = None
 
+    # TIMEDEL is intentionally not mapped to resolution in this subtask.
     resolution: float | None = None
-    if ext_header.get("TIMEDEL") is not None:
-        try:
-            resolution = float(ext_header["TIMEDEL"])
-        except (TypeError, ValueError):
-            resolution = None
 
     if not time_unit:
         findings["info"].append(
@@ -427,12 +459,24 @@ def _to_float64(data: np.ndarray, col_name: str, path: Path) -> np.ndarray:
 
 
 def _to_int64(data: np.ndarray, col_name: str, path: Path) -> np.ndarray:
-    """Convert column data to int64, rejecting float types (would truncate)."""
+    """Convert column data to int64, rejecting float types (would truncate).
+
+    Before conversion, verifies all values fit within the int64 range to
+    prevent overflow or wraparound when converting unsigned 64-bit values.
+    """
     kind = data.dtype.kind
     if kind not in _INTEGER_KINDS:
         raise FITSImportError(
             f"Column '{col_name}' in '{path}' has incompatible type "
             f"'{data.dtype}'; expected an integer type."
+        )
+    int64_info = np.iinfo(np.int64)
+    if np.any(data < int64_info.min) or np.any(data > int64_info.max):
+        raise FITSImportError(
+            f"Column '{col_name}' in '{path}' contains integer values "
+            f"outside the int64 range "
+            f"[{int64_info.min}, {int64_info.max}]. Conversion would "
+            "overflow or wrap around."
         )
     return np.array(data, dtype=np.int64, copy=True)
 
@@ -489,8 +533,8 @@ def _check_unit_compatibility(
             "Flux and uncertainty units must match."
         )
 
-    # Both present: must be identical.
-    if flux_unit != uncertainty_unit:
+    # Both present: must be identical (after trimming whitespace).
+    if flux_unit.strip() != uncertainty_unit.strip():
         raise FITSImportError(
             f"Flux column '{flux_col}' has unit '{flux_unit}' but its "
             f"uncertainty column '{err_col}' has unit '{uncertainty_unit}' "
