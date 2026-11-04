@@ -352,3 +352,34 @@ These two tests encode the pre-change schema version and are in `tests/test_proj
 **Git:** No commit or push was made. The pre-existing D4 modifications (`src/project_model.py`, `tests/test_project_model.py`, `tests/test_project_service.py`, `docs/development/DEVELOPMENT_LOG.md`) were preserved; only `tests/test_project_discovery.py` was added as an additional modified file by this task.
 
 **Limitations (unchanged, deferred):** The implementation remains strictly single-user and local. No multi-user functionality exists.
+
+### 2026-11-04 — Stage 2 Task 2.2 Subtask 2.2.2 (FITS Import and Validation) complete
+
+**Activity:** Implemented the FITS light-curve importer for Subtask 2.2.2. All work performed in Build mode using the existing `.venv` (Python 3.13.9). No Foundation documents modified. No commits or pushes made.
+
+**Files created (2):**
+- `src/fits_importer.py` — `FITSImportError` exception and `import_light_curve(file_path)` function. Reads FITS files read-only, identifies the light-curve table structurally (not by fixed HDU index), extracts supported measurements (`TIME`, `SAP_FLUX`, `PDCSAP_FLUX`, `SAP_FLUX_ERR`, `PDCSAP_FLUX_ERR`, `SAP_QUALITY`, `CADENCENO`), preserves scientific metadata, validates contents, and constructs `LightCurveDataset` from Subtask 2.2.1.
+- `tests/test_fits_importer.py` — 46 focused unit tests using temporary FITS fixtures under pytest `tmp_path`.
+
+**Module responsibilities:**
+- `fits_importer.py`: Pure FITS import logic — file opening, HDU identification, column extraction, metadata mapping, unit compatibility validation, validation findings, dataset construction. No PySide6, no project/service/repository imports, no database, no persistence.
+
+**Key implementation details:**
+- Structural HDU identification: candidates must contain `TIME` and at least one of `SAP_FLUX`/`PDCSAP_FLUX`. Prefer `EXTNAME=LIGHTCURVE` among valid candidates; otherwise first in HDU order. Multiple candidates → informational finding.
+- Extension header metadata read from `selected_hdu.header` (not fixed `hdul[1]`). Primary header provides source metadata; extension header provides time metadata. Application-level fallback for source metadata is documented and independent of FITS `INHERIT`.
+- Unit policy: flux and uncertainty units read independently; compatibility enforced before column construction (both present & identical → import; both blank → import with `unit=""`; only one present → `FITSImportError`; both present but different → `FITSImportError`). `MeasurementColumn.unit` holds the flux unit only — no separate uncertainty-unit field.
+- Time metadata: `TIMEUNIT` → `TimeInfo.unit`; descriptive `TUNIT1` → `TimeInfo.reference`; `TIMESYS` → time scale; `TIMEREF` → reference frame; `BJDREFI`/`BJDREFF` → reference value. No BKJD→JD conversion.
+- Integer `TNULL` policy: sentinel declared but unused → import normally; sentinel present in data → `FITSImportError`.
+- Validation findings: non-finite values (warning), negative uncertainties (warning), duplicate times (warning), non-monotonic times (warning), nonzero quality flags (info, no filtering), orphan uncertainties (warning), missing time unit (info).
+- All arrays copied before FITS file close; memory-mapped data safely handled.
+
+**Verified test results (46 tests, all passing):**
+- `tests/test_fits_importer.py` — 46 tests (Subtask 2.2.2), 0 failures.
+
+**Full non-GUI test suite:** 219 passed, 0 failed (includes 46 new importer tests + all existing project and model tests). Two GUI test files (`test_new_project_dialog.py`, `test_project_save_close.py`) hang in this environment due to PySide6 display requirements — pre-existing issue unrelated to this task.
+
+**Approved decisions preserved (not modified):** D1–D6 as recorded previously.
+
+**Next steps:** Subtask 2.2.3 (project association and provisional persistence) is pending. Subtask 2.2.4 (broader Stage 2.2 verification, documentation reconciliation, completion assessment) is pending.
+
+**Git:** No commit or push was made.
