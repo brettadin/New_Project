@@ -287,3 +287,78 @@ For 2.3, 2.4, and 2.5, I would prepare broader task outlines but wait to write d
 For example, the visualization task should use the actual data model and interfaces established by the importer, rather than assumptions we make today.
 
 My recommendation: Prepare eight Markdown documents for Subtask 2.2: four Plan prompts and four corresponding Build prompts. Keep them outside the repository, as you have been doing.
+
+
+
+
+# PROGRESS TRACKING. UPDATE AS WE GO
+
+
+We'll maintain a running implementation record for Subtask 2.2, then use it as the source material for the consolidated documentation update in 2.2.4.
+
+The important thing is to record verified implementation details, not just a summary saying a task is complete.
+
+### Running record — Subtask 2.2
+
+2.2.1 — FITS inspection and data-model design
+
+Implemented
+
+- Created `src/light_curve.py`.
+- Created `tests/test_light_curve.py`.
+- Implemented the seven model components, structural validation, array ownership, calculated properties, and serialization.
+- Focused tests: 48 passed.
+- Full suite: 224 passed (baseline 176).
+- No existing files modified; no commits or pushes.
+- No FITS importer, persistence, or project integration implemented.
+
+2.2.2 — FITS importer
+
+Not started
+
+Record:
+
+- FITS structures and HDUs inspected.
+- Columns mapped to model fields.
+- Time conventions and units.
+- Handling of missing/non-finite measurements.
+- Quality flags and cadence preservation.
+- Validation warnings and errors.
+- Tests and actual test results.
+
+2.2.3 — Project association and persistence
+
+Not started
+
+Record:
+
+- How datasets associate with projects.
+- Where data is stored under the provisional storage approach.
+- Save/reopen behavior.
+- Source-file references and provenance.
+- Compatibility with project metadata schema v2.
+- Tests and actual test results.
+
+2.2.4 — Testing, documentation, and completion
+
+Pending
+
+Consolidate implementation records, verify all three subtasks, run regression tests, update the relevant documentation, and report remaining limitations.
+
+### How we'll maintain it
+
+At the end of each implementation task, we'll capture:
+
+1. Files created, modified, or deleted.
+2. Actual functionality implemented.
+3. Important technical decisions and their reasoning.
+4. Test commands and exact results.
+5. Deviations from the approved plan.
+6. Known limitations and unresolved questions.
+7. Explicitly deferred work.
+
+I'll also distinguish verified facts from assumptions so we don't accidentally document intended behavior as implemented behavior.
+
+One important constraint will remain visible throughout: D6's permanent storage architecture is deferred. We should document any provisional storage decisions without accidentally presenting them as final architecture.
+
+We can carry this record forward as we work through 2.2.2 and 2.2.3, then use it for the documentation pass.&#x20;
