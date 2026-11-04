@@ -20,6 +20,10 @@
 
 [Paste complete ChatGPT message.]
 
+### Prompt review 
+
+
+### Prompt planning
 ---
 
 # 2. Planning Phase
