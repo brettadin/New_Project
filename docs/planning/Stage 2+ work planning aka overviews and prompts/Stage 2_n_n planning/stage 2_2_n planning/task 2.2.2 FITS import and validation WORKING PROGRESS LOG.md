@@ -4188,3 +4188,1847 @@ Do not claim that code, tests, or the current repository state were independentl
 
 # opencode plan v5
 
+---
+
+# Subtask 2.2.2 — FITS Import and Validation: Final Revised Implementation Plan
+
+**Mode: PLAN ONLY. Do not implement, edit files, or begin BUILD.**
+
+This report revises the Subtask 2.2.2 plan with five targeted corrections: uncertainty-unit handling, original unit-string preservation, header-inheritance terminology clarification, scope preservation, and a final completeness review. All previously approved design elements are preserved unless a specific correction requires a change.
+
+---
+
+## 1. Repository State and Preparation
+
+### 1.1 Verified repository facts (current)
+
+| Item | Verified value |
+|---|---|
+| Working directory | `C:\Code\New_Project` (git repo, branch `master`) |
+| HEAD commit | `113a9ab task 2.2.2 planning begin` — Author: Brett, Date: Wed Nov 4 13:52:42 2026. Pre-existing user commit; not created by me. |
+| Previous commit | `f65f14f Task 2.2.1` |
+| Working tree vs HEAD | One modified file (not staged): `docs/planning/.../task 2.2.2 FITS import and validation WORKING PROGRESS LOG.md` (+1,119 insertions beyond the commit). Pre-existing user edit; left untouched. |
+| Untracked files | None |
+
+### 1.2 Confirmation that Subtask 2.2.1 exists
+**Verified.** `src/light_curve.py` and `tests/test_light_curve.py` both exist in the repository.
+
+### 1.3 Current test baseline
+`python -m pytest -q` → **224 passed, 0 failed.** Regression baseline for 2.2.2.
+
+### 1.4 Existing user changes / repository-state concerns
+The pre-existing planning-file changes (one committed, one modified in working tree) are outside `src/` and `tests/` and predate this task. They will not be touched.
+
+---
+
+## 2. Verified 2.2.1 Model Review
+
+All details from direct inspection of `src/light_curve.py` (493 lines) and `tests/test_light_curve.py` (759 lines). The model is reused as-is; no redesign.
+
+### 2.1 Model components and interfaces (verified)
+
+| Component | Key fields / behavior |
+|---|---|
+| `DatasetSource` | `original_filename`, `original_file_path`, `archive`, `source_id`, `mission`, `instrument`, `target_object`, `checksum` — all `str \| None`, default `None`. |
+| `TimeInfo` | `values: np.ndarray` (required); `unit`, `reference`, `time_scale`, `time_reference_frame` (str, default `""`); `reference_value`, `start`, `stop`, `resolution`, `format_hint` (float/str, default `None`). Unknown → `""`/`None`; does not block construction. |
+| `MeasurementColumn` | `name: str`, `values: np.ndarray`, `unit: str = ""`, `uncertainties: np.ndarray \| None = None`, `description: str \| None = None`. **One `unit` field shared by values and uncertainties; no separate uncertainty-unit field.** Property `n_nonfinite`. Non-finite preserved; `None` uncertainties ≠ zero-array uncertainties. |
+| `MeasurementSeries` | `series: dict[str, MeasurementColumn]`; keys must equal `column.name`; no duplicates. |
+| `ValidationFinding` | `code`, `message`, `severity`, `column: str \| None`, `row_indices: list[int] \| None` (zero-based). |
+| `ValidationReport` | `errors`, `warnings`, `info` lists of `ValidationFinding`. |
+| `LightCurveDataset` | `dataset_id` (UUID, auto), `name` (str, required), `source`, `time`, `measurements`, `quality_flags: np.ndarray \| None`, `cadence_numbers: np.ndarray \| None`, `validation`, `imported_at` (auto ISO UTC), `notes: str \| None`. Property `n_observations`. |
+
+### 2.2 Structural validation (`__post_init__`)
+Raises `LightCurveValidationError` (subclass of `ValueError`) for invalid `dataset_id`; missing/non-ndarray `time.values`; non-str `time.unit`; non-`MeasurementSeries` measurements; key/name mismatch; duplicate names; non-ndarray column values/unit/uncertainties; array length mismatches vs. time; non-`ValidationReport` validation; non-str `imported_at`.
+
+### 2.3 Array copying and ownership
+`_copy_arrays` converts `time.values` and each measurement `values`/`uncertainties` to `np.array(..., dtype=np.float64, copy=True)`; `quality_flags`/`cadence_numbers` to `np.array(..., dtype=np.int64, copy=True)`. Model owns independent copies. Importer must still copy FITS memory-mapped arrays **before** closing the file.
+
+### 2.4 Serialization
+`to_dict()` → JSON-compatible dict; arrays → `.tolist()`; `None` preserved as `None`. `from_dict(data)` reconstructs and re-validates; distinguishes `None` from arrays.
+
+### 2.5 Compatibility with Kepler FITS dataset
+Compatible — no model change required for the supported columns, given the corrected uncertainty-unit policy below.
+
+---
+
+## 3. Confirmed FITS Inspection Findings
+
+Verified against `C:\Code\AstronomyData\Kepler\Kepler-10b\kplr011904151-2009131105131_llc_full.fits` (read-only, outside repo, unchanged) using Astropy 7.2.0.
+
+### 3.1 HDU structure
+| HDU | Type | EXTNAME | Rows/Cols | Notes |
+|---|---|---|---|---|
+| 0 | `PrimaryHDU` | `PRIMARY` | — | 58 cards |
+| 1 | `BinTableHDU` | `LIGHTCURVE` | 476 × 20 | Light-curve table |
+| 2 | `ImageHDU` | `APERTURE` | 12 × 10 | Aperture mask |
+
+### 3.2 LIGHTCURVE columns (verified)
+| # | Column | Format | dtype (stored) | Unit (TUNIT) | 2.2.2 role |
+|---|---|---|---|---|---|
+| 1 | `TIME` | D | `>f8` | `BJD - 2454833` | **Required** (time) |
+| 2 | `TIMECORR` | E | `>f4` | `d` | Unsupported |
+| 3 | `CADENCENO` | J | `>i4` | — | **Optional** (cadence) |
+| 4 | `SAP_FLUX` | E | `>f4` | `e-/s` | **Required flux** (≥1 of SAP/PDCSAP) |
+| 5 | `SAP_FLUX_ERR` | E | `>f4` | `e-/s` | **Optional** uncertainty for SAP_FLUX |
+| 6 | `SAP_BKG` | E | `>f4` | `e-/s` | Unsupported |
+| 7 | `SAP_BKG_ERR` | E | `>f4` | `e-/s` | Unsupported |
+| 8 | `PDCSAP_FLUX` | E | `>f4` | `e-/s` | **Required flux** (≥1 of SAP/PDCSAP) |
+| 9 | `PDCSAP_FLUX_ERR` | E | `>f4` | `e-/s` | **Optional** uncertainty for PDCSAP_FLUX |
+| 10 | `SAP_QUALITY` | J | `>i4` | — | **Optional** quality flags |
+| 11–20 | centroid/position (+ errors) | D/E | mixed | pixel/pixels | Unsupported |
+
+### 3.3 Data values (verified)
+| Column | Non-finite | Min | Max | Notes |
+|---|---|---|---|---|
+| `TIME` | 0 | 120.53914651 | 130.24539528 | All finite |
+| `CADENCENO` | N/A (int) | 568 | 1043 | Consecutive |
+| `SAP_FLUX` | 4 (NaN) | 532355.0 | 532944.06 | Preserved as-is |
+| `SAP_FLUX_ERR` | 4 (NaN) | ~20.04 | ~20.05 | Same 4 rows as SAP_FLUX |
+| `PDCSAP_FLUX` | 7 (NaN) | 501346.12 | 501746.75 | Preserved as-is |
+| `PDCSAP_FLUX_ERR` | 7 (NaN) | ~20.57 | ~20.77 | Same 7 rows as PDCSAP_FLUX |
+| `SAP_QUALITY` | N/A (int) | — | — | 37 nonzero; `{64, 128, 8192, 8320, 12352, 32800}` |
+| `PSF_CENTR1` | 476 (all NaN) | — | — | Unsupported column |
+
+No TNULL null sentinels present in this file; missing float values are NaN.
+
+### 3.4 Header metadata (verified)
+**Primary:** `TELESCOP=Kepler`, `INSTRUME=Kepler Photometer`, `OBJECT=KIC 11904151`, `KEPLERID=11904151`, `ORIGIN=NASA/Ames`, `MISSION=Kepler`, `QUARTER=0`, `OBSMODE=long cadence`, `DATE=2015-08-26`.
+
+**LIGHTCURVE extension (`INHERIT=True`):** `TIMEREF=SOLARSYSTEM`, `TASSIGN=SPACECRAFT`, `TIMESYS=TDB`, `BJDREFI=2454833`, `BJDREFF=0.0`, `TIMEUNIT=d`, `TSTART=120.52892942`, `TSTOP=130.25561236`, `TIMEDEL=0.02043359821692`, `EXPOSURE=8.95472397`, `DATE-OBS`, `DATE-END`, PDC keywords.
+
+### 3.5 Time convention (verified)
+Values are `BJD − 2454833` (BKJD-style), days (`TIMEUNIT=d`), time system `TDB`, reference frame `SOLARSYSTEM`, `BJDREFI=2454833`, `BJDREFF=0`. **Not ordinary Julian Date.** No conversion.
+
+---
+
+## 4. Proposed Importer Module and Public Interface
+
+### 4.1 Module path
+`src/fits_importer.py` — new module alongside `src/light_curve.py`. Single module initially.
+
+### 4.2 Dependencies
+`astropy.io.fits` (approved, DEC-006), `numpy` (approved), `src.light_curve` (reused model). Standard library only otherwise. **No new dependencies.** No PySide6, no project/service/repository imports.
+
+### 4.3 Public interface
+**Successful import:** return a constructed `LightCurveDataset`. Non-fatal validation findings stored in `dataset.validation` (warnings/info). **No separate result dataclass.**
+
+**Failed import:** raise `FITSImportError` with meaningful explanation. No partially populated dataset returned.
+
+```python
+class FITSImportError(Exception):
+    """Raised when a file-level condition prevents FITS light-curve import."""
+
+def import_light_curve(file_path: str | os.PathLike[str]) -> LightCurveDataset:
+    """Read a FITS light-curve file and return a LightCurveDataset.
+
+    Raises FITSImportError for file access, FITS parsing, missing/unsuitable
+    table structure, missing required columns, incompatible data types, empty
+    tables, mismatched flux/uncertainty units, integer TNULL sentinels in data,
+    or model-construction failures. Non-fatal scientific conditions are reported
+    via the returned dataset's ValidationReport.
+    """
+```
+
+### 4.4 Failure categories distinguished
+1. File access failures (missing, unreadable, permission).
+2. FITS parsing failures (corrupted, invalid structure).
+3. Missing/unusable light-curve structure (no table with TIME + flux column).
+4. Missing required columns (`TIME`, or neither `SAP_FLUX` nor `PDCSAP_FLUX`).
+5. Incompatible data types (non-numeric where numeric required).
+6. Mismatched flux/uncertainty units (§5).
+7. Integer `TNULL` sentinel present in data (§6).
+8. Structural model-construction failures (`LightCurveValidationError` re-raised as `FITSImportError` with context).
+
+### 4.5 Exception context
+Exceptions chain the underlying cause (`raise FITSImportError(...) from exc`); user-facing message meaningful without leaking implementation details. No GUI error handling.
+
+---
+
+## 5. Measurement Units and Uncertainty-Unit Policy (Correction 1)
+
+### 5.1 Model representation constraint
+`MeasurementColumn` has exactly one `unit` field shared by its measurement values and optional uncertainty values. There is **no separate uncertainty-unit field**, and the model is not extended without explicit approval.
+
+### 5.2 Required uncertainty-unit behavior
+For each supported flux/uncertainty pair (`SAP_FLUX`/`SAP_FLUX_ERR`, `PDCSAP_FLUX`/`PDCSAP_FLUX_ERR`), the importer applies this policy:
+
+| Flux unit (`TUNITn`) | Uncertainty unit (`TUNITn`) | Required behavior |
+|---|---|---|
+| Present | Present and identical | Import normally |
+| Absent or blank | Absent or blank | Import with `unit=""` |
+| Present | Absent or blank | Raise `FITSImportError` |
+| Absent or blank | Present | Raise `FITSImportError` |
+| Present | Present but different | Raise `FITSImportError` |
+
+### 5.3 Rationale
+The importer must not silently assume that a missing uncertainty unit matches the flux unit, because the model has no way to record distinct units. It must not discard uncertainty data to bypass a mismatch. Raising `FITSImportError` preserves the caller's ability to decide how to proceed.
+
+### 5.4 No hardcoding; unknown units preserved
+Units are never hardcoded based on the Kepler example. Any `TUNITn` absent or blank → `""` (unknown) per model convention.
+
+---
+
+## 6. Preserve Original Unit Strings (Correction 2)
+
+### 6.1 Unit-string preservation
+- If a `TUNITn` value is present and non-empty, store its **original string** in the corresponding model unit field.
+- Do not replace unfamiliar or unrecognized unit strings with `""`.
+- Do not perform unit conversion.
+- Do not require the importer to recognize every possible unit.
+- Use `""` only when the relevant unit metadata is absent or blank.
+
+### 6.2 Application to flux/uncertainty columns
+- `SAP_FLUX.unit` ← original `TUNIT4` string if present and non-empty, else `""`.
+- `PDCSAP_FLUX.unit` ← original `TUNIT8` string if present and non-empty, else `""`.
+- `SAP_FLUX.uncertainties` unit ← original `TUNIT5` string if present and non-empty, else `""` (subject to the mismatch policy in §5.2).
+- `PDCSAP_FLUX.uncertainties` unit ← original `TUNIT9` string if present and non-empty, else `""` (subject to the mismatch policy in §5.2).
+
+### 6.3 Application to time metadata
+- `TimeInfo.unit` ← original `TIMEUNIT` string if present and non-empty, else `""`.
+- `TimeInfo.reference` ← original descriptive convention text from table `TUNIT1` if present and non-empty (e.g. `BJD - 2454833`), else `""`. This is descriptive time-convention metadata, not a physical unit.
+- `TimeInfo.time_scale` ← original `TIMESYS` string if present and non-empty, else `""`.
+- `TimeInfo.time_reference_frame` ← original `TIMEREF` string if present and non-empty, else `""`.
+- `TimeInfo.reference_value` ← numeric `BJDREFI` (+ `BJDREFF`) if present, else `None`.
+
+### 6.4 No conflation
+- `TIMEUNIT` remains the source of `TimeInfo.unit`; the descriptive `TUNIT1` convention is **not** conflated with it.
+- No unit conversion is performed; original time values are copied unchanged; no BKJD→JD conversion.
+
+---
+
+## 7. FITS Header Inheritance versus Application Fallback (Correction 3)
+
+### 7.1 Terminology distinction
+The plan distinguishes precisely between:
+
+- **FITS header inheritance:** behavior defined by FITS conventions and the `INHERIT` keyword on an extension HDU. The importer observes `INHERIT=True` as file content but does **not** rely on automatic in-memory merging of primary-header keywords into the extension header by Astropy.
+- **Application-level fallback:** the importer's explicitly documented decision to consult the primary header when a value is absent from the selected extension header. This is an importer policy, independent of whether FITS header inheritance is enabled.
+
+### 7.2 Explicit dual-header read
+The importer reads **both** the primary header (`hdul[0].header`) and the extension header (`hdul[1].header`) explicitly. It does not assume Astropy automatically merges inherited primary-header keywords into the extension header.
+
+### 7.3 Application-level fallback policy (not FITS inheritance)
+- **Extension-specific time metadata** (`TIMEUNIT`, `TIMESYS`, `TIMEREF`, `BJDREFI`, `BJDREFF`, `TSTART`/`TSTOP`): extension header is authoritative. If absent from the extension, the value is unknown (`""`/`None`) — no silent primary fallback.
+- **Source metadata** (`mission`, `instrument`, `target_object`, `source_id`): primary header preferred (`MISSION`, `INSTRUME`, `OBJECT`, `KEPLERID`); if absent from primary, the extension header may be consulted as a **documented application-level fallback**. This fallback is an importer policy, **not** automatic FITS inheritance, and is independent of the `INHERIT` keyword.
+
+### 7.4 Conflicting values
+If primary and extension declare conflicting values for the same metadata class, the source preferred for that metadata class per §7.3 wins; the conflict is noted in `dataset.validation.info` or `dataset.notes` so the distinction is visible, not silently resolved.
+
+### 7.5 Verified vs unknown metadata
+Metadata present and readable → stored as verified (original string preserved per §6). Metadata absent, blank, or unreadable → field left unknown (`""`/`None`); never fabricated.
+
+---
+
+## 8. Time Metadata (Correction 2, reinforced)
+
+| Model field | Source | Meaning | Verified Kepler value |
+|---|---|---|---|
+| `TimeInfo.unit` | `TIMEUNIT` (extension header) | Physical unit of numeric time values | `"d"` |
+| `TimeInfo.reference` | Table `TUNIT1` (descriptive convention text) | Time reference/convention, not a physical unit | `"BJD - 2454833 (BKJD)"` |
+| `TimeInfo.time_scale` | `TIMESYS` (extension header) | Time scale | `"TDB"` |
+| `TimeInfo.time_reference_frame` | `TIMEREF` (extension header) | Reference frame | `"SOLARSYSTEM"` |
+| `TimeInfo.reference_value` | `BJDREFI` (+ `BJDREFF`) (extension header) | Numeric reference offset | `2454833.0` |
+| `TimeInfo.start` | `TSTART` (extension header) | Observation start | `120.52892942` |
+| `TimeInfo.stop` | `TSTOP` (extension header) | Observation stop | `130.25561236` |
+| `TimeInfo.resolution` | `TIMEDEL` (extension header) | Time resolution | `0.02043359821692` only if meaning/units verified, else `None` |
+
+Original time values copied unchanged (float64); **no BKJD→JD conversion**, no relabeling as JD, no timestamp modification. Missing values preserved as `""`/`None`, never inferred.
+
+---
+
+## 9. HDU Identification and Selection (unchanged, retained)
+
+1. Open `fits.open(path, mode="readonly")` inside a `with` block (guaranteed close on success and failure).
+2. Iterate all HDUs; structural candidates = table HDUs whose column names include `TIME` and at least one of `SAP_FLUX` / `PDCSAP_FLUX`.
+3. Preferred `EXTNAME=LIGHTCURVE`: a candidate whose `EXTNAME == "LIGHTCURVE"` is preferred **only if it itself satisfies the structural requirements**.
+4. An unsuitable `LIGHTCURVE`-named HDU **must not** override a structurally valid candidate. If the HDU named `LIGHTCURVE` lacks `TIME` or both flux columns, it is skipped.
+5. Multiple structural candidates → deterministic tie-break (first in HDU order) + informational finding about ambiguity. Ambiguity does not prevent import when a reasonable choice exists.
+6. No candidate → `FITSImportError`.
+All array copies made **inside** the `with` block before close.
+
+---
+
+## 10. Numeric Dtype Rules (unchanged, retained)
+
+| Array group | Columns | Stored FITS dtype | Conversion rule | Model dtype |
+|---|---|---|---|---|
+| Floating-point scientific measurements | `TIME`, `SAP_FLUX`, `PDCSAP_FLUX`, `SAP_FLUX_ERR`, `PDCSAP_FLUX_ERR` | `>f8`, `>f4` | Convert to `np.float64` via `np.array(..., dtype=np.float64, copy=True)`. Endianness handled by NumPy. Non-finite preserved. | `float64` |
+| Integer-valued identifiers/flags | `CADENCENO`, `SAP_QUALITY` | `>i4` | Convert to `np.int64` via `np.array(..., dtype=np.int64, copy=True)`. No float-to-integer truncation — read as integers directly. | `int64` |
+
+Incompatible types (e.g., string/object where numeric expected) → `FITSImportError`. No silent coercion. No universal type-conversion framework.
+
+---
+
+## 11. Integer FITS TNULL Policy (unchanged, retained)
+
+### 11.1 How Astropy exposes null values (verified by read-only test)
+- **Float columns** (`D`/`E`): Astropy does **not** permit `TNULL`. Missing float values are ordinary `NaN`.
+- **Integer columns** (`J`): Astropy permits `TNULL`, exposed via `Column.null`. Read via `hdul[1].data` the raw sentinel integer is preserved as a plain integer — **not masked**.
+
+### 11.2 Policy
+For each supported integer column (`SAP_QUALITY`, `CADENCENO`):
+1. Inspect `Column.null` to determine whether a sentinel is declared.
+2. If no sentinel declared → import normally.
+3. If sentinel declared but no data value equals it → import normally.
+4. If **any** data value equals the declared sentinel → raise `FITSImportError`, because the model cannot represent per-row missing integer values (`quality_flags`/`cadence_numbers` are plain `np.ndarray \| None` with `None` meaning whole column absent).
+
+### 11.3 Preservation rules
+A known missing sentinel is **not** preserved as an ordinary quality flag or cadence number. Model unchanged.
+
+---
+
+## 12. Measurement and Metadata Mapping
+
+### 12.1 Required / optional / unsupported table columns
+
+| FITS column | Role | Required for construction? | Model target | Absent behavior |
+|---|---|---|---|---|
+| `TIME` | timestamps | **Yes** | `TimeInfo.values` (+ metadata) | `FITSImportError` |
+| `SAP_FLUX` | SAP flux | At least one of SAP/PDCSAP | `MeasurementColumn("SAP_FLUX")` | — |
+| `PDCSAP_FLUX` | PDC flux | At least one of SAP/PDCSAP | `MeasurementColumn("PDCSAP_FLUX")` | — |
+| `SAP_FLUX_ERR` | SAP uncertainty | Optional | `SAP_FLUX.uncertainties` | `None`, warning |
+| `PDCSAP_FLUX_ERR` | PDC uncertainty | Optional | `PDCSAP_FLUX.uncertainties` | `None`, warning |
+| `SAP_QUALITY` | quality flags | Optional | `quality_flags` (int64) | `None` |
+| `CADENCENO` | cadence ids | Optional | `cadence_numbers` (int64) | `None` |
+| Other columns | — | No | Not imported | possibly noted in `notes` |
+
+SAP and PDCSAP remain independent columns, each paired with its own `*_FLUX_ERR`. Never merged. Never one silently discarded.
+
+### 12.2 Source metadata mapping
+
+| `DatasetSource` field | Proposed source | Notes |
+|---|---|---|
+| `mission` | `MISSION` header | Leave `None` if absent |
+| `instrument` | `INSTRUME` header | Leave `None` if absent |
+| `target_object` | `OBJECT` header | Leave `None` if absent |
+| `source_id` | `KEPLERID` (target ID) | Distinct from product/file ID; `None` if absent |
+| `archive` | `None` | **Not** `ORIGIN` unless supplying archive independently established |
+| `original_filename` | Actual input filename | |
+| `original_file_path` | Actual input path | |
+
+`ORIGIN=NASA/Ames` may be retained in `notes` or an informational finding, but **must not** automatically be described as the archive. Do not invent source metadata; absent/ambiguous → field unknown.
+
+### 12.3 Dataset naming
+- `LightCurveDataset.name` = input filename stem (e.g. `kplr011904151-2009131105131_llc_full`).
+- Full original filename in `DatasetSource.original_filename`; full path in `original_file_path`.
+- Do not invent a target name or scientific label when the filename is the only reliable identifier.
+- Empty/unusable stem → `FITSImportError` rather than silently inventing a name.
+
+### 12.4 Metadata not representable by current model
+Raw FITS `TTYPE`/`TFORM`/`TDISP`/`NULL` per column, full header card list, aperture image (HDU2), PDC config keywords. Not important enough to require a model change for 2.2.2; may go in `LightCurveDataset.notes` or remain out of scope. Any model-field addition is a 2.2.1-scope decision requiring approval.
+
+---
+
+## 13. Complete Validation Matrix
+
+Classifications: **Error** = `FITSImportError` raised, no dataset constructed. **Warning** = import succeeds, finding in `dataset.validation.warnings`, data preserved. **Info** = import succeeds, finding in `dataset.validation.info`, data preserved.
+
+| # | Condition | Succeeds? | Finding | Data preserved? | Raises `FITSImportError`? | User approval? |
+|---|------|---|---|---|---|---|
+| F1 | Missing / unreadable file | No | — | N/A | Yes | No |
+| F2 | Corrupted / invalid FITS structure | No | — | N/A | Yes | No |
+| F3 | No table HDU with TIME + flux column | No | — | N/A | Yes | No |
+| F4 | Multiple candidate tables, no reasonable choice | No | — | N/A | Yes | No |
+| F5 | Multiple candidate tables, reasonable choice | Yes | Info (ambiguity) | Yes | No | No |
+| C1 | `TIME` column absent | No | — | N/A | Yes | No |
+| C2 | Neither `SAP_FLUX` nor `PDCSAP_FLUX` present | No | — | N/A | Yes | No |
+| C3 | Only SAP or only PDCSAP available | Yes | Info (single flux series) | Yes | No | No |
+| C4 | Flux present, matching `*_FLUX_ERR` absent | Yes | Warning (missing uncertainty) | Yes, `uncertainties=None` | No | No |
+| C5 | `*_FLUX_ERR` present but its flux absent | Yes | Warning/info (orphan ignored) | Yes, orphan not imported | No | No |
+| C6 | `SAP_QUALITY` / `CADENCENO` absent | Yes | Optional → `None` | Yes | No | No |
+| C7 | Extra unsupported numeric columns | Yes | Not imported (possibly info) | Yes | No | No |
+| C8 | Unexpected/incompatible dtype (non-numeric where numeric required) | No | — | N/A | Yes | No |
+| C9 | Array length ≠ time length | No | — | N/A | Yes (via model `LightCurveValidationError`) | No |
+| M1 | Non-numeric timestamp | No | — | N/A | Yes | No |
+| M2 | Non-finite timestamp (NaN/inf) | Yes | Warning | Yes, preserved | No | No |
+| M3 | Non-finite flux (NaN/inf) | Yes | Warning (`n_nonfinite` + zero-based row indices) | Yes, preserved | No | No |
+| M4 | Non-finite uncertainty | Yes | Warning | Yes, preserved | No | No |
+| M5 | Negative uncertainty | Yes | Warning | Yes, preserved (not replaced) | No | No |
+| M6 | Duplicate timestamps | Yes | Warning | Yes, preserved (not reordered) | No | No |
+| M7 | Non-monotonic timestamps | Yes | Warning | Yes, preserved (order kept) | No | No |
+| Q1 | Nonzero quality flags present | Yes | Info (count + zero-based row indices) | Yes, preserved | No | No |
+| Q2 | Quality-bitmask filtering requested | N/A | Not performed in 2.2.2 | — | No | **Yes** (future policy) |
+| T1 | Missing time unit | Yes | Info | Yes, `unit=""` | No | No |
+| T2 | Missing time reference/scale/frame | Yes | Info | Yes, empty/`None` | No | No |
+| T3 | Missing flux unit | Yes | Info | Yes, `unit=""` | No | No |
+| U1 | Flux unit ≠ uncertainty unit per §5.2 table | No | — | N/A | Yes | No |
+| N1 | Integer `TNULL` sentinel present in `SAP_QUALITY`/`CADENCENO` data | No | — | N/A | Yes | No |
+| E1 | Empty table (zero observations) | No | — | N/A | Yes | No |
+| D1 | Duplicate/conflicting supported column names | No | — | N/A | Yes | No |
+
+**Scientific reasoning (§5.1, §5.6):** non-finite and questionable measurements preserved, never removed/replaced/zero-filled (§5.1.4, §5.6.1 acceptance 3). Quality flags never auto-filtered (§3.4.10; REVIEW-002 justification). File-level failures are exceptions, not `ValidationReport` errors (no dataset exists to attach to — §5.6.7).
+
+---
+
+## 14. Error-Handling Strategy
+
+- Single exception type: `FITSImportError` (subclass of `Exception`), meaningful user-facing message, chained underlying cause (`from exc`).
+- Success path: return `LightCurveDataset`; warnings/infos live in `dataset.validation`.
+- Failure path: raise `FITSImportError`; no partially populated dataset returned.
+- `LightCurveValidationError` from model construction caught and re-raised as `FITSImportError` with context.
+- Zero-based `row_indices` in every `ValidationFinding`.
+- No GUI error handling; no file-selection dialogs; caller decides presentation.
+
+---
+
+## 15. Data-Integrity and Resource-Management Approach
+
+- Open read-only (`mode="readonly"`); never open for write.
+- All array copies made **inside** the `with fits.open(...)` block before close.
+- Convert big-endian FITS dtypes to native float64/int64 via `np.array(..., dtype=..., copy=True)`; float32→float64 value-preserving.
+- Non-finite values preserved (no fill/replace/interpolate).
+- Quality flags preserved (no filtering).
+- Distinct columns remain distinct (SAP ≠ PDCSAP).
+- No observations silently discarded (observation count preserved).
+- No units or timestamps silently changed (no BKJD→JD conversion).
+- Original unit strings preserved per §6; no unit conversion.
+- No normalization/detrending/filtering.
+- Model's `_copy_arrays` provides a second authoritative safety copy.
+- Original FITS file bytes/checksum unchanged; file remains outside repo and unmodified.
+
+---
+
+## 16. Focused 2.2.2 Automated Testing Plan
+
+Tests in a new module (`tests/test_fits_importer.py`), fixtures under pytest `tmp_path` — **no dependence on external Kepler dataset or absolute Windows paths.** Portable suite passes on any machine.
+
+### 16.1 Temporary FITS fixtures
+- Valid Kepler-like multi-HDU table (Primary + LIGHTCURVE at index 1 + APERTURE).
+- Light-curve table at a different HDU index.
+- Structural table identification (by TIME + flux column, not position).
+- Multiple candidate tables (deterministic tie-break + info finding).
+- Unsuitable HDU named `LIGHTCURVE` lacking TIME/flux; structurally valid candidate elsewhere wins.
+- Missing `TIME` column → `FITSImportError`; missing both flux columns → `FITSImportError`.
+- Only `SAP_FLUX`; only `PDCSAP_FLUX`.
+- Correct uncertainty pairing (SAP↔SAP_ERR, PDCSAP↔PDCSAP_ERR).
+- Missing uncertainty column(s) → `uncertainties=None` + warning.
+- Missing optional quality/cadence columns → `None`.
+- Supported numeric dtypes and endianness (`>f4`, `>f8`, `>i4` → float64/int64).
+- Rejection of incompatible string/object types → `FITSImportError`.
+- Preservation of NaN/inf in flux and uncertainty.
+- Negative uncertainty → warning, preserved.
+- Duplicate / non-monotonic timestamps → warning, preserved, not reordered.
+- Missing metadata (no time unit, no mission) → info / `None` fields.
+- Duplicate/conflicting supported column names → `FITSImportError`.
+- Flux unit present but uncertainty unit absent → `FITSImportError` (§5.2).
+- Flux unit absent but uncertainty unit present → `FITSImportError` (§5.2).
+- Flux unit present, uncertainty unit present but different → `FITSImportError` (§5.2).
+- Original unit strings preserved in model fields (§6).
+- Empty table (zero observations) → `FITSImportError`.
+- Corrupted / truncated / unreadable file → `FITSImportError`.
+- Integer `TNULL` sentinel declared but unused → import normally; sentinel present in data → `FITSImportError` (§11).
+- Successful dataset construction and model compatibility (`to_dict()`/`from_dict()` round-trip).
+- Arrays usable after FITS closure (independent of open handle).
+- Preservation of observation count and original data values.
+- Zero-based validation row indices.
+
+### 16.2 Fixture assumptions corrected
+A normal FITS binary table has a shared row structure; columns do **not** have independently mismatched lengths. Model-level array-alignment testing remains in `tests/test_light_curve.py` (already covered there). Do not invent malformed FITS cases merely to increase test count.
+
+### 16.3 Resource-safety testing
+- Assert returned arrays remain usable after the FITS file has closed.
+- Assert returned arrays do not depend on an open FITS file handle.
+- Assert imported data remains intact after close.
+
+### 16.4 Model-only tests
+Stay in `tests/test_light_curve.py`; not duplicated in importer tests.
+
+### 16.5 Baseline
+Existing 224 tests must continue to pass with no regressions.
+
+---
+
+## 17. Optional Real-Data Verification
+
+Gated on the actual Kepler file being present. Skipped if absent — never makes the portable suite dependent on it.
+
+Verify:
+- HDU identified as LIGHTCURVE (index 1 structurally, not hardcoded).
+- 476 rows; TIME range 120.5391–130.2454; unit `d`, scale `TDB`, reference `BJD - 2454833`, frame `SOLARSYSTEM`.
+- SAP_FLUX and PDCSAP_FLUX both present and distinct; 4 and 7 non-finite respectively.
+- Uncertainties paired correctly; same non-finite rows per column.
+- `SAP_QUALITY` 37 nonzero preserved; `CADENCENO` 568–1043 consecutive.
+- `DatasetSource.original_file_path`/`original_filename` set; mission/instrument/target_object/source_id correct.
+- `name` = filename stem.
+- Valid `LightCurveDataset` constructed; `to_dict()`/`from_dict()` round-trip.
+- Original file checksum unchanged before/after import.
+
+---
+
+## 18. Documentation Impact Assessment
+
+Per `AGENTS.md`, documentation updates are required during Build mode. No documents modified now.
+
+### 18.1 2.2.2 implementation documentation (to update during Build)
+- Record `src/fits_importer.py` module and responsibilities.
+- Record public interface (`import_light_curve`, `FITSImportError`) and error behavior.
+- Record supported FITS structure and column/metadata mapping (including units, time metadata, null handling).
+- Record validation behavior, classifications, and limitations.
+- Record focused test coverage and results.
+- Update `docs/MASTER_DEVELOPMENT_ROADMAP.md` (2.2.2 status) and `docs/development/DEVELOPMENT_LOG.md` (implementation record, test results).
+
+### 18.2 2.2.4 consolidation (future)
+- Broader documentation reconciliation across subtasks; cross-subtask completion status; overall Stage 2.2 verification; remaining deferred/unresolved items.
+
+Foundation documents remain read-only. `docs/README.md` unchanged unless a significant document is added/renamed. Existing project-lifecycle docs unchanged.
+
+---
+
+## 19. Explicit Subtask Boundaries
+
+| Subtask | Responsibility | In 2.2.2? |
+|---|---|---|
+| 2.2.1 | Light-curve data model — done | No (reused only) |
+| 2.2.2 | FITS reading, HDU identification, extraction, metadata, validation, `LightCurveDataset` construction, importer tests | **Yes — current** |
+| 2.2.3 | Project association, dataset persistence, save/reopen, project IDs/ownership/permissions | No (future) |
+| 2.2.4 | Broader Stage 2.2 verification, documentation reconciliation, completion assessment | No (future) |
+
+**Excluded from 2.2.2:** project association/persistence, visualization, BLS/analysis, quality-bitmask filtering, archive downloads, universal FITS framework, database/permanent storage, GUI dialogs.
+
+---
+
+## 20. Risks and Unresolved Issues
+
+| Risk / Issue | Description | Mitigation / Status |
+|---|---|---|
+| Memory-mapped FITS arrays | Post-close access fails if not copied. | Copy arrays inside `with` block. |
+| Big-endian FITS dtypes | Convert to native float64/int64. | `np.array(..., dtype=..., copy=True)` handles byte swap. |
+| Float32 → float64 upcast | Value-preserving, doubles flux memory. | Acceptable at ~476 rows. |
+| Model re-copies arrays | Slight redundancy. | Acceptable; correctness > micro-optimization. |
+| Real dataset not portable | Automated suite must not depend on absolute path. | Gate real-data test on file presence; `tmp_path` fixtures. |
+| Validation vs exception boundary | Risk of putting import failures into nonexistent dataset's `ValidationReport`. | Enforce separation (Section 14). |
+| Quality-bitmask pressure | Temptation to auto-filter nonzero flags. | Explicitly excluded; future analysis operation requiring approval. |
+| Scope creep | Pressure to add persistence, UI, visualization, BLS. | Explicitly excluded. |
+| Flux/uncertainty unit mismatch | Model has no separate uncertainty-unit field. | Raising `FITSImportError` (§5.2) — no model change. |
+| Integer `TNULL` sentinel in data | Model cannot represent per-row missing integers. | Raising `FITSImportError` (§11.2) — no model change; Kepler file has no TNULL so does not block initial implementation. |
+
+---
+
+## 21. Recommended Build Implementation Sequence
+
+1. Create `src/fits_importer.py`: `FITSImportError`, `import_light_curve()`, FITS opening/close, structural HDU identification (§9).
+2. Implement extraction of `TIME`, `SAP_FLUX`/`PDCSAP_FLUX`, uncertainties, `SAP_QUALITY`, `CADENCENO` (array copies inside `with` block; per-column units from `TUNITn`).
+3. Implement unit cross-check (§5.2) and integer `TNULL` policy (§11.2).
+4. Implement metadata extraction into `DatasetSource` and `TimeInfo` (BKJD/TDB/SOLARSYSTEM; explicit dual-header resolution per §7; time unit from `TIMEUNIT`, reference from descriptive `TUNIT1` per §6.3; filename-stem naming).
+5. Implement validation findings and `ValidationReport`; dataset assembly via `LightCurveDataset` constructor; surface `LightCurveValidationError` as `FITSImportError`.
+6. Create focused importer tests with `tmp_path` fixtures (§16); run targeted tests.
+7. Optional real-data verification against Kepler file, gated on presence (§17).
+8. Run full suite (224+ passing, no regressions).
+9. Update documentation per `AGENTS.md` — Build-mode activity (§18).
+10. Review completion; hand off to 2.2.3.
+
+Deferred to 2.2.3: project association, persistence, save/reopen. Deferred to 2.2.4: broader integration verification and documentation reconciliation.
+
+---
+
+## 22. Decisions or Questions Requiring User Approval
+
+1. **Approval of this revised plan** before switching to Build mode (the gate itself).
+2. No additional decisions require approval. All open points from prior revisions are resolved by explicit policy in this document:
+   - Uncertainty-unit mismatch → `FITSImportError` (§5.2), no model extension.
+   - Original unit strings preserved; `TIMEUNIT` → `TimeInfo.unit`; descriptive `TUNIT1` → `TimeInfo.reference` (§6), no inference.
+   - Integer `TNULL` sentinel in data → `FITSImportError` (§11.2), no model change.
+   - Header inheritance vs application fallback distinguished (§7); fallback is importer policy, not automatic FITS inheritance.
+   - HDU selection: `LIGHTCURVE` preference only among structurally valid candidates (§9).
+
+---
+
+## Remaining Assumptions or Unresolved Decisions
+
+**No implementation-critical uncertainties remain.** All five correction areas have been resolved by explicit policy:
+
+1. Uncertainty-unit handling — resolved by the §5.2 policy table (`FITSImportError` on mismatch or one-sided presence).
+2. Original unit-string preservation — resolved by §6 (store original `TUNITn` text; `""` only when absent/blank; no conversion).
+3. Header inheritance vs application fallback — resolved by §7 (explicit dual-header read; application-level fallback documented separately from FITS `INHERIT`; no claim of automatic inheritance).
+4. Scope — unchanged (§4, §19); no redesign or expansion.
+5. Time unit vs time reference — resolved by §6.3 and §8 (`TIMEUNIT` → `TimeInfo.unit`; descriptive `TUNIT1` → `TimeInfo.reference`; separate fields; no conflation).
+
+The only gate is user approval of this plan before switching to Build mode. No code, tests, or repository changes have been made in this session.
+
+---
+
+**Statement:** Implementation has not started. No files were created, modified, deleted, or renamed in this session; no dependencies installed; no configuration changed; the original FITS file untouched; no Git state altered by me. This revised plan remains in PLAN mode and awaits your explicit review and authorization before any switch to Build mode.
+
+# CHATGPT v5 review
+
+The revised plan is substantially improved. The five correction areas are addressed, and the scope remains appropriately limited to Subtask 2.2.2.
+
+I would not approve BUILD quite yet. There are two remaining inconsistencies and a few test-coverage details to tighten.
+
+## Remaining corrections
+
+### 1. Header access must use the selected HDU, not `hdul[1]`
+
+Section 7.2 currently says:
+
+> The importer reads both the primary header (`hdul[0].header`) and the extension header (`hdul[1].header`) explicitly.
+
+That conflicts with Section 9, which allows the light-curve table to exist at an HDU index other than 1.
+
+The importer must use the header belonging to the structurally selected light-curve HDU, whatever its index.
+
+Required correction:
+
+- Primary header: `hdul[0].header`
+- Selected table header: `selected_hdu.header`
+- All extension-specific metadata and column metadata must come from the selected table HDU.
+
+This is important because otherwise the importer could identify the correct table but read metadata from the wrong extension.
+
+### 2. Multiple-candidate behavior is inconsistent
+
+Section 9 says multiple valid candidates are resolved deterministically by choosing the first in HDU order, with an informational finding.
+
+However, Section 13 includes:
+
+> F4 — Multiple candidate tables, no reasonable choice → `FITSImportError`.
+
+The plan never defines when a candidate-selection situation becomes unreasonable. Under the current deterministic-first policy, F4 is effectively undefined.
+
+Keep the already-established behavior:
+
+- No valid candidate: `FITSImportError`.
+- One valid candidate: select it.
+- Multiple valid candidates: prefer a structurally valid `LIGHTCURVE` candidate; otherwise select the first valid candidate in HDU order and record an informational finding.
+- If multiple candidates have the same preference, use the first in HDU order.
+
+Remove F4 or redefine it only if there is a specific structural condition that genuinely prevents selection.
+
+### 3. Complete the unit-handling tests
+
+The unit policy is now explicit, but the test plan should cover all permitted and rejected cases.
+
+Make sure tests cover:
+
+- Both flux and uncertainty units present and identical → import.
+- Both absent or blank → import with `unit=""`.
+- Flux unit present, uncertainty unit absent → reject.
+- Flux unit absent, uncertainty unit present → reject.
+- Both present but different → reject.
+- An unfamiliar but non-empty unit string → preserve the original string.
+- Whitespace-only unit metadata → treat as blank.
+
+For nonblank strings, preserve the original text rather than normalizing or rewriting it.
+
+### 4. Specify the orphan uncertainty finding
+
+Section 13, C5 currently says:
+
+> Warning/info (orphan ignored).
+
+Choose one classification. I recommend warning, since the file contains an uncertainty column that cannot be associated with an imported measurement.
+
+The orphan column should not be imported or silently paired with another flux column.
+
+## Final assessment
+
+| Area                             | Assessment                                   |
+| -------------------------------- | -------------------------------------------- |
+| 2.2.1 model compatibility        | Acceptable based on the reported inspection  |
+| FITS structure and HDU selection | Acceptable, with the header-index correction |
+| Measurement extraction           | Acceptable                                   |
+| Uncertainty pairing and units    | Acceptable, with test additions              |
+| Time metadata                    | Acceptable                                   |
+| Header inheritance/fallback      | Clear                                        |
+| TNULL handling                   | Explicit                                     |
+| Data preservation                | Explicit                                     |
+| Validation classifications       | Mostly complete                              |
+| Automated testing                | Comprehensive, with the additions above      |
+| Scope boundaries                 | Clear                                        |
+| Documentation obligations        | Appropriate                                  |
+
+Status: Nearly ready for BUILD.
+
+Send Nemotron one final narrow refinement for these points. If it incorporates them without introducing new scope or changing the approved behavior, I would consider the plan ready for your explicit BUILD authorization.
+
+No implementation authorization has been given yet.
+
+
+# chatgpt v5 revise prompt
+
+# Final PLAN Refinement — Subtask 2.2.2 FITS Importer
+
+**Mode: PLAN ONLY. Do not implement, edit files, create tests, or begin BUILD.**
+
+Revise the current Subtask 2.2.2 implementation plan to address the four remaining review findings below.
+
+These are targeted corrections, not an invitation to redesign the importer. Preserve the existing approved architecture, policies, scope, and implementation sequence unless a correction below requires a direct change.
+
+## 1. Correct extension-header selection
+
+The current plan's Section 7.2 refers to:
+
+`hdul[1].header`
+
+This is incorrect because Section 9 allows the structurally selected light-curve table to exist at any HDU index.
+
+Revise the header-access policy:
+
+- Primary header: `hdul[0].header`
+- Light-curve extension header: `selected_hdu.header`, where `selected_hdu` is the HDU chosen by the structural selection procedure in Section 9.
+- All extension-specific time metadata must come from the selected table HDU.
+- All column-specific metadata, including `TUNITn`, `Column.null`, and other column definitions, must come from the selected table HDU.
+- Do not assume the light-curve table is at index 1.
+- Keep the existing primary-header versus extension-header application fallback policy unchanged.
+- Ensure the implementation sequence and test plan consistently refer to the selected HDU rather than a fixed index.
+
+Add or retain a test where the valid light-curve table is at an HDU index other than 1 and verify that its own header metadata is used.
+
+## 2. Resolve the multiple-candidate inconsistency
+
+Section 9 defines deterministic candidate selection, but Section 13 still contains an undefined condition:
+
+"Multiple candidate tables, no reasonable choice."
+
+The existing policy should be made consistent throughout the document:
+
+1. No structurally valid candidate → `FITSImportError`.
+2. Exactly one valid candidate → select it.
+3. Multiple valid candidates with one or more structurally valid `EXTNAME=LIGHTCURVE` candidates → prefer a `LIGHTCURVE` candidate.
+4. If multiple candidates have the same preference, select the first in HDU order.
+5. If multiple valid candidates exist and selection is resolved by this deterministic rule, import successfully and record an informational finding describing the ambiguity and selection.
+
+Remove the undefined "no reasonable choice" failure condition from the validation matrix unless you identify and precisely define a genuine structural condition that prevents selection. Do not invent an additional selection failure mode.
+
+Update the HDU-selection section, validation matrix, tests, and implementation sequence so they all describe the same policy.
+
+## 3. Complete unit-handling test coverage
+
+The uncertainty-unit policy in Section 5.2 is approved. Make sure the automated test plan explicitly covers every branch:
+
+| Flux unit | Uncertainty unit | Expected result |
+|---|---|---|
+| Present | Present and identical | Import |
+| Absent or blank | Absent or blank | Import with `unit=""` |
+| Present | Absent or blank | `FITSImportError` |
+| Absent or blank | Present | `FITSImportError` |
+| Present | Present but different | `FITSImportError` |
+
+Also add explicit tests for:
+
+- An unfamiliar but non-empty unit string: preserve the original string exactly; do not normalize, rewrite, or discard it.
+- Whitespace-only unit metadata: treat it as blank.
+- The same preservation and blank-handling principles for `TIMEUNIT` and descriptive `TUNIT1` metadata where applicable.
+
+Do not change the approved unit policy. Do not add unit conversion or a unit-recognition framework.
+
+## 4. Define orphan uncertainty handling consistently
+
+Section 13, condition C5 currently allows either a warning or informational finding.
+
+Choose one classification and use it consistently throughout the plan.
+
+Use this policy:
+
+- If `SAP_FLUX_ERR` exists but `SAP_FLUX` does not, ignore the orphan uncertainty column and add a **warning**.
+- If `PDCSAP_FLUX_ERR` exists but `PDCSAP_FLUX` does not, ignore the orphan uncertainty column and add a **warning**.
+- Never pair an orphan uncertainty column with another flux series.
+- Do not treat an orphan uncertainty column as a file-level import failure.
+
+Update the validation matrix and test plan accordingly.
+
+## 5. Final consistency review
+
+After applying the four corrections:
+
+- Review the complete plan for contradictory statements, obsolete wording, and references to fixed HDU index 1.
+- Ensure all affected sections agree: header metadata, HDU selection, validation matrix, automated tests, and implementation sequence.
+- Preserve all existing scope boundaries:
+  - No project association or persistence.
+  - No GUI or visualization.
+  - No BLS or analysis functionality.
+  - No quality-bitmask filtering.
+  - No model redesign.
+  - No unrelated refactoring.
+- Preserve the requirement to update the appropriate non-Foundation documentation during BUILD, consistent with `AGENTS.md`.
+- Do not modify Foundation documentation.
+- Do not claim new repository inspection, test execution, or verification unless actually performed during this PLAN session.
+
+Return the **complete revised implementation plan**, not merely a change summary.
+
+End with:
+
+1. **Remaining Assumptions or Unresolved Decisions** — list only genuine remaining uncertainties, or explicitly state that none are implementation-critical.
+2. **Final Readiness Assessment** — state whether the plan is internally consistent and ready for user approval to enter BUILD mode.
+
+**Stop after presenting the revised plan. Do not begin implementation or make repository changes. Wait for explicit user authorization before BUILD.**
+
+# opencode plan v6
+
+---
+
+# Subtask 2.2.2 — FITS Import and Validation: Final Revised Implementation Plan
+
+**Mode: PLAN ONLY. Do not implement, edit files, create tests, or begin BUILD.**
+
+This report is the final revision of the Subtask 2.2.2 plan, incorporating four targeted corrections: (1) extension-header selection via `selected_hdu.header` rather than fixed index `hdul[1]`, (2) consistent multiple-candidate selection policy removing the undefined "no reasonable choice" condition, (3) complete unit-handling test coverage for all policy branches, and (4) consistent warning classification for orphan uncertainty columns. All previously approved architecture, policies, scope, and implementation sequence are preserved.
+
+---
+
+## 1. Repository State and Preparation
+
+### 1.1 Verified repository facts (current session)
+
+| Item | Verified value |
+|---|---|
+| Working directory | `C:\Code\New_Project` (git repo, branch `master`) |
+| HEAD commit | `113a9ab task 2.2.2 planning begin` — Author: Brett, Date: Wed Nov 4 13:52:42 2026. Pre-existing user commit; not created by me. |
+| Previous commit | `f65f14f Task 2.2.1` |
+| Working tree vs HEAD | One modified file (not staged): `docs/planning/.../task 2.2.2 FITS import and validation WORKING PROGRESS LOG.md` (+1,119 insertions beyond the commit). Pre-existing user edit; left untouched. |
+| Untracked files | None |
+
+### 1.2 Confirmation that Subtask 2.2.1 exists
+**Verified in this session.** `src/light_curve.py` and `tests/test_light_curve.py` both exist in the repository.
+
+### 1.3 Current test baseline
+`python -m pytest -q` → **224 passed, 0 failed.** Regression baseline for 2.2.2.
+
+### 1.4 Existing user changes / repository-state concerns
+The pre-existing planning-file changes (one committed, one modified in working tree) are outside `src/` and `tests/` and predate this task. They will not be touched.
+
+---
+
+## 2. Verified 2.2.1 Model Review
+
+All details from direct inspection of `src/light_curve.py` (493 lines) and `tests/test_light_curve.py` (759 lines) in this session. The model is reused as-is; no redesign.
+
+### 2.1 Model components and interfaces (verified)
+
+| Component | Key fields / behavior |
+|---|---|
+| `DatasetSource` | `original_filename`, `original_file_path`, `archive`, `source_id`, `mission`, `instrument`, `target_object`, `checksum` — all `str \| None`, default `None`. |
+| `TimeInfo` | `values: np.ndarray` (required); `unit`, `reference`, `time_scale`, `time_reference_frame` (str, default `""`); `reference_value`, `start`, `stop`, `resolution`, `format_hint` (float/str, default `None`). Unknown → `""`/`None`; does not block construction. |
+| `MeasurementColumn` | `name: str`, `values: np.ndarray`, `unit: str = ""`, `uncertainties: np.ndarray \| None = None`, `description: str \| None = None`. **One `unit` field shared by values and uncertainties; no separate uncertainty-unit field.** Property `n_nonfinite`. Non-finite preserved; `None` uncertainties ≠ zero-array uncertainties. |
+| `MeasurementSeries` | `series: dict[str, MeasurementColumn]`; keys must equal `column.name`; no duplicates. |
+| `ValidationFinding` | `code`, `message`, `severity`, `column: str \| None`, `row_indices: list[int] \| None` (zero-based). |
+| `ValidationReport` | `errors`, `warnings`, `info` lists of `ValidationFinding`. |
+| `LightCurveDataset` | `dataset_id` (UUID, auto), `name` (str, required), `source`, `time`, `measurements`, `quality_flags: np.ndarray \| None`, `cadence_numbers: np.ndarray \| None`, `validation`, `imported_at` (auto ISO UTC), `notes: str \| None`. Property `n_observations`. |
+
+### 2.2 Structural validation (`__post_init__`)
+Raises `LightCurveValidationError` (subclass of `ValueError`) for invalid `dataset_id`; missing/non-ndarray `time.values`; non-str `time.unit`; non-`MeasurementSeries` measurements; key/name mismatch; duplicate names; non-ndarray column values/unit/uncertainties; array length mismatches vs. time; non-`ValidationReport` validation; non-str `imported_at`.
+
+### 2.3 Array copying and ownership
+`_copy_arrays` converts `time.values` and each measurement `values`/`uncertainties` to `np.array(..., dtype=np.float64, copy=True)`; `quality_flags`/`cadence_numbers` to `np.array(..., dtype=np.int64, copy=True)`. Model owns independent copies. Importer must still copy FITS memory-mapped arrays **before** closing the file.
+
+### 2.4 Serialization
+`to_dict()` → JSON-compatible dict; arrays → `.tolist()`; `None` preserved as `None`. `from_dict(data)` reconstructs and re-validates; distinguishes `None` from arrays.
+
+### 2.5 Compatibility with Kepler FITS dataset
+Compatible — no model change required for the supported columns, given the corrected uncertainty-unit policy below.
+
+---
+
+## 3. Confirmed FITS Inspection Findings
+
+Verified against `C:\Code\AstronomyData\Kepler\Kepler-10b\kplr011904151-2009131105131_llc_full.fits` (read-only, outside repo, unchanged) using Astropy 7.2.0 (inspected earlier in this session).
+
+### 3.1 HDU structure
+| HDU | Type | EXTNAME | Rows/Cols | Notes |
+|---|---|---|---|---|
+| 0 | `PrimaryHDU` | `PRIMARY` | — | 58 cards |
+| 1 | `BinTableHDU` | `LIGHTCURVE` | 476 × 20 | Light-curve table |
+| 2 | `ImageHDU` | `APERTURE` | 12 × 10 | Aperture mask |
+
+The table happens to be at index 1 in this file, but the importer must **not** assume index 1; structural selection (Section 5) determines the selected HDU at runtime.
+
+### 3.2 LIGHTCURVE columns (verified)
+| # | Column | Format | dtype (stored) | Unit (TUNIT) | 2.2.2 role |
+|---|---|---|---|---|---|
+| 1 | `TIME` | D | `>f8` | `BJD - 2454833` | **Required** (time) |
+| 2 | `TIMECORR` | E | `>f4` | `d` | Unsupported |
+| 3 | `CADENCENO` | J | `>i4` | — | **Optional** (cadence) |
+| 4 | `SAP_FLUX` | E | `>f4` | `e-/s` | **Required flux** (≥1 of SAP/PDCSAP) |
+| 5 | `SAP_FLUX_ERR` | E | `>f4` | `e-/s` | **Optional** uncertainty for SAP_FLUX |
+| 6 | `SAP_BKG` | E | `>f4` | `e-/s` | Unsupported |
+| 7 | `SAP_BKG_ERR` | E | `>f4` | `e-/s` | Unsupported |
+| 8 | `PDCSAP_FLUX` | E | `>f4` | `e-/s` | **Required flux** (≥1 of SAP/PDCSAP) |
+| 9 | `PDCSAP_FLUX_ERR` | E | `>f4` | `e-/s` | **Optional** uncertainty for PDCSAP_FLUX |
+| 10 | `SAP_QUALITY` | J | `>i4` | — | **Optional** quality flags |
+| 11–20 | centroid/position (+ errors) | D/E | mixed | pixel/pixels | Unsupported |
+
+### 3.3 Data values (verified)
+| Column | Non-finite | Min | Max | Notes |
+|---|---|---|---|---|
+| `TIME` | 0 | 120.53914651 | 130.24539528 | All finite |
+| `CADENCENO` | N/A (int) | 568 | 1043 | Consecutive |
+| `SAP_FLUX` | 4 (NaN) | 532355.0 | 532944.06 | Preserved as-is |
+| `SAP_FLUX_ERR` | 4 (NaN) | ~20.04 | ~20.05 | Same 4 rows as SAP_FLUX |
+| `PDCSAP_FLUX` | 7 (NaN) | 501346.12 | 501746.75 | Preserved as-is |
+| `PDCSAP_FLUX_ERR` | 7 (NaN) | ~20.57 | ~20.77 | Same 7 rows as PDCSAP_FLUX |
+| `SAP_QUALITY` | N/A (int) | — | — | 37 nonzero; `{64, 128, 8192, 8320, 12352, 32800}` |
+| `PSF_CENTR1` | 476 (all NaN) | — | — | Unsupported column |
+
+No TNULL null sentinels present in this file; missing float values are NaN.
+
+### 3.4 Header metadata (verified)
+**Primary:** `TELESCOP=Kepler`, `INSTRUME=Kepler Photometer`, `OBJECT=KIC 11904151`, `KEPLERID=11904151`, `ORIGIN=NASA/Ames`, `MISSION=Kepler`, `QUARTER=0`, `OBSMODE=long cadence`, `DATE=2015-08-26`.
+
+**LIGHTCURVE extension (`INHERIT=True`):** `TIMEREF=SOLARSYSTEM`, `TASSIGN=SPACECRAFT`, `TIMESYS=TDB`, `BJDREFI=2454833`, `BJDREFF=0.0`, `TIMEUNIT=d`, `TSTART=120.52892942`, `TSTOP=130.25561236`, `TIMEDEL=0.02043359821692`, `EXPOSURE=8.95472397`, `DATE-OBS`, `DATE-END`, PDC keywords.
+
+### 3.5 Time convention (verified)
+Values are `BJD − 2454833` (BKJD-style), days (`TIMEUNIT=d`), time system `TDB`, reference frame `SOLARSYSTEM`, `BJDREFI=2454833`, `BJDREFF=0`. **Not ordinary Julian Date.** No conversion.
+
+---
+
+## 4. Proposed Importer Module and Public Interface
+
+### 4.1 Module path
+`src/fits_importer.py` — new module alongside `src/light_curve.py`. Single module initially.
+
+### 4.2 Dependencies
+`astropy.io.fits` (approved, DEC-006), `numpy` (approved), `src.light_curve` (reused model). Standard library only otherwise. **No new dependencies.** No PySide6, no project/service/repository imports.
+
+### 4.3 Public interface
+**Successful import:** return a constructed `LightCurveDataset`. Non-fatal validation findings stored in `dataset.validation` (warnings/info). **No separate result dataclass.**
+
+**Failed import:** raise `FITSImportError` with meaningful explanation. No partially populated dataset returned.
+
+```python
+class FITSImportError(Exception):
+    """Raised when a file-level condition prevents FITS light-curve import."""
+
+def import_light_curve(file_path: str | os.PathLike[str]) -> LightCurveDataset:
+    """Read a FITS light-curve file and return a LightCurveDataset.
+
+    Raises FITSImportError for file access, FITS parsing, missing/unsuitable
+    table structure, missing required columns, incompatible data types, empty
+    tables, mismatched flux/uncertainty units, integer TNULL sentinels in data,
+    or model-construction failures. Non-fatal scientific conditions are reported
+    via the returned dataset's ValidationReport.
+    """
+```
+
+### 4.4 Failure categories distinguished
+1. File access failures (missing, unreadable, permission).
+2. FITS parsing failures (corrupted, invalid structure).
+3. Missing/unusable light-curve structure (no table with TIME + flux column).
+4. Missing required columns (`TIME`, or neither `SAP_FLUX` nor `PDCSAP_FLUX`).
+5. Incompatible data types (non-numeric where numeric required).
+6. Mismatched flux/uncertainty units (Section 7).
+7. Integer `TNULL` sentinel present in data (Section 12).
+8. Structural model-construction failures (`LightCurveValidationError` re-raised as `FITSImportError` with context).
+
+### 4.5 Exception context
+Exceptions chain the underlying cause (`raise FITSImportError(...) from exc`); user-facing message meaningful without leaking implementation details. No GUI error handling.
+
+---
+
+## 5. HDU Identification and Selection (Corrected — any index)
+
+1. Open `fits.open(path, mode="readonly")` inside a `with` block (guaranteed close on success and failure).
+2. Iterate **all** HDUs; structural candidates = table HDUs (`BinTableHDU`/`TableHDU`) whose column names include `TIME` and at least one of `SAP_FLUX` / `PDCSAP_FLUX`.
+3. Apply the multiple-candidate selection policy (Section 6) to choose exactly one `selected_hdu` from among the structural candidates.
+4. If no structural candidate exists → `FITSImportError` (no usable light-curve table).
+5. All array copies are made **inside** the `with` block before close (memory-mapped data).
+6. The light-curve table is **not** assumed to be at index 1. The selected HDU may be at any index.
+7. After selection, all extension-specific metadata is read from `selected_hdu.header` (Section 6), and all column-specific metadata from `selected_hdu.columns` (Section 7).
+
+---
+
+## 6. Header Metadata Selection (Corrected — `selected_hdu.header`, not `hdul[1]`)
+
+### 6.1 Explicit header sources
+- **Primary header:** `hdul[0].header` — source for mission/instrument/target/source metadata (`MISSION`, `INSTRUME`, `OBJECT`, `KEPLERID`, `ORIGIN`).
+- **Light-curve extension header:** `selected_hdu.header` — where `selected_hdu` is the HDU chosen by the structural selection procedure in Section 5. Source for all extension-specific time metadata (`TIMEUNIT`, `TIMESYS`, `TIMEREF`, `BJDREFI`, `BJDREFF`, `TSTART`/`TSTOP`, `TIMEDEL`, `EXPOSURE`, etc.).
+- **Column-specific metadata:** from `selected_hdu.columns` — `TUNITn`, `Column.null`, TTYPE, TFORM, TDISP, etc., for each column of the selected table HDU.
+
+### 6.2 No fixed-index assumption
+The importer does **not** assume the light-curve table is at index 1. `hdul[1].header` is never referenced as the light-curve extension header. All extension metadata flows through `selected_hdu`.
+
+### 6.3 Application fallback policy (unchanged)
+The existing primary-header versus extension-header application fallback policy is unchanged:
+- Extension-specific time metadata: `selected_hdu.header` is authoritative. If absent, value is unknown (`""`/`None`) — no silent primary fallback for time metadata.
+- Source metadata: primary header preferred (`MISSION`, `INSTRUME`, `OBJECT`, `KEPLERID`); if absent from primary, extension header may be consulted as a **documented application-level fallback**. This fallback is an importer policy, **not** automatic FITS inheritance, and is independent of the `INHERIT` keyword.
+
+### 6.4 Conflicting values
+If primary and extension declare conflicting values for the same metadata class, the source preferred for that metadata class per Section 9 wins; the conflict is noted in `dataset.validation.info` or `dataset.notes`.
+
+---
+
+## 7. Measurement Units and Uncertainty-Unit Policy
+
+### 7.1 Model representation constraint
+`MeasurementColumn` has exactly one `unit` field shared by its measurement values and optional uncertainty values. There is **no separate uncertainty-unit field**, and the model is not extended without explicit approval.
+
+### 7.2 Required uncertainty-unit behavior
+For each supported flux/uncertainty pair (`SAP_FLUX`/`SAP_FLUX_ERR`, `PDCSAP_FLUX`/`PDCSAP_FLUX_ERR`), the importer applies this policy:
+
+| Flux unit (`TUNITn`) | Uncertainty unit (`TUNITn`) | Required behavior |
+|---|---|---|
+| Present | Present and identical | Import normally |
+| Absent or blank | Absent or blank | Import with `unit=""` |
+| Present | Absent or blank | Raise `FITSImportError` |
+| Absent or blank | Present | Raise `FITSImportError` |
+| Present | Present but different | Raise `FITSImportError` |
+
+### 7.3 Rationale
+The importer must not silently assume that a missing uncertainty unit matches the flux unit, because the model has no way to record distinct units. It must not discard uncertainty data to bypass a mismatch. Raising `FITSImportError` preserves the caller's ability to decide how to proceed.
+
+### 7.4 Unit-string preservation (all unit fields)
+- If a `TUNITn` value is present and non-empty, store its **original string** in the corresponding model unit field.
+- Do not replace unfamiliar or unrecognized unit strings with `""`.
+- Do not perform unit conversion.
+- Do not require the importer to recognize every possible unit.
+- Use `""` only when the relevant unit metadata is absent or blank.
+- Whitespace-only unit metadata is treated as blank.
+
+### 7.5 Application to specific fields
+- `SAP_FLUX.unit` ← original `TUNIT4` string if present and non-empty, else `""`.
+- `PDCSAP_FLUX.unit` ← original `TUNIT8` string if present and non-empty, else `""`.
+- `SAP_FLUX.uncertainties` unit ← original `TUNIT5` string if present and non-empty, else `""` (subject to the mismatch policy in §7.2).
+- `PDCSAP_FLUX.uncertainties` unit ← original `TUNIT9` string if present and non-empty, else `""` (subject to the mismatch policy in §7.2).
+
+---
+
+## 8. Time Metadata
+
+| Model field | Source | Meaning | Verified Kepler value |
+|---|---|---|---|
+| `TimeInfo.unit` | `TIMEUNIT` (`selected_hdu.header`) | Physical unit of numeric time values | `"d"` |
+| `TimeInfo.reference` | Table `TUNIT1` (`selected_hdu.columns`) | Time reference/convention text, not a physical unit | `"BJD - 2454833 (BKJD)"` |
+| `TimeInfo.time_scale` | `TIMESYS` (`selected_hdu.header`) | Time scale | `"TDB"` |
+| `TimeInfo.time_reference_frame` | `TIMEREF` (`selected_hdu.header`) | Reference frame | `"SOLARSYSTEM"` |
+| `TimeInfo.reference_value` | `BJDREFI` (+ `BJDREFF`) (`selected_hdu.header`) | Numeric reference offset | `2454833.0` |
+| `TimeInfo.start` | `TSTART` (`selected_hdu.header`) | Observation start | `120.52892942` |
+| `TimeInfo.stop` | `TSTOP` (`selected_hdu.header`) | Observation stop | `130.25561236` |
+| `TimeInfo.resolution` | `TIMEDEL` (`selected_hdu.header`) | Time resolution | `0.02043359821692` only if meaning/units verified, else `None` |
+
+- `TIMEUNIT` remains the source of `TimeInfo.unit`; the descriptive `TUNIT1` convention is **not** conflated with it.
+- No unit conversion is performed; original time values are copied unchanged; no BKJD→JD conversion.
+- Missing values preserved as `""`/`None`, never inferred.
+
+---
+
+## 9. Header Inheritance versus Application Fallback (Terminology)
+
+### 9.1 Precise distinction
+- **FITS header inheritance:** behavior defined by FITS conventions and the `INHERIT` keyword on an extension HDU. The importer observes `INHERIT=True` as file content but does **not** rely on automatic in-memory merging of primary-header keywords into the extension header by Astropy.
+- **Application-level fallback:** the importer's explicitly documented decision to consult the primary header when a value is absent from the selected extension header. This is an importer policy, independent of whether FITS header inheritance is enabled.
+
+### 9.2 Wording requirement
+Do not describe application-level fallback as "eligible for FITS inheritance" or as automatic FITS inheritance. Use "application-level fallback" or "importer fallback policy" consistently.
+
+---
+
+## 10. Numeric Dtype Rules
+
+| Array group | Columns | Stored FITS dtype | Conversion rule | Model dtype |
+|---|---|---|---|---|
+| Floating-point scientific measurements | `TIME`, `SAP_FLUX`, `PDCSAP_FLUX`, `SAP_FLUX_ERR`, `PDCSAP_FLUX_ERR` | `>f8`, `>f4` | Convert to `np.float64` via `np.array(..., dtype=np.float64, copy=True)`. Endianness handled by NumPy. Non-finite preserved. | `float64` |
+| Integer-valued identifiers/flags | `CADENCENO`, `SAP_QUALITY` | `>i4` | Convert to `np.int64` via `np.array(..., dtype=np.int64, copy=True)`. No float-to-integer truncation — read as integers directly. | `int64` |
+
+Incompatible types (e.g., string/object where numeric expected) → `FITSImportError`. No silent coercion. No universal type-conversion framework.
+
+---
+
+## 11. Integer FITS TNULL Policy
+
+### 11.1 How Astropy exposes null values (verified by read-only test earlier in this session)
+- **Float columns** (`D`/`E`): Astropy does **not** permit `TNULL`. Missing float values are ordinary `NaN`.
+- **Integer columns** (`J`): Astropy permits `TNULL`, exposed via `Column.null`. Read via `hdul[1].data` the raw sentinel integer is preserved as a plain integer — **not masked**.
+
+### 11.2 Policy
+For each supported integer column (`SAP_QUALITY`, `CADENCENO`) of `selected_hdu`:
+1. Inspect `Column.null` to determine whether a sentinel is declared.
+2. If no sentinel declared → import normally.
+3. If sentinel declared but no data value equals it → import normally.
+4. If **any** data value equals the declared sentinel → raise `FITSImportError`, because the model cannot represent per-row missing integer values (`quality_flags`/`cadence_numbers` are plain `np.ndarray \| None` with `None` meaning whole column absent).
+
+### 11.3 Preservation rules
+A known missing sentinel is **not** preserved as an ordinary quality flag or cadence number. Model unchanged.
+
+---
+
+## 12. Orphan Uncertainty Handling (Corrected — consistent warning classification)
+
+### 12.1 Policy
+- If `SAP_FLUX_ERR` exists but `SAP_FLUX` does not, ignore the orphan uncertainty column and add a **warning**.
+- If `PDCSAP_FLUX_ERR` exists but `PDCSAP_FLUX` does not, ignore the orphan uncertainty column and add a **warning**.
+- Never pair an orphan uncertainty column with another flux series.
+- Do not treat an orphan uncertainty column as a file-level import failure.
+
+### 12.2 Consistency
+The classification **warning** is used consistently throughout the validation matrix (§13), test plan (§17), and implementation sequence (§22). No other classification (info, error) is used for orphan uncertainties anywhere in this plan.
+
+---
+
+## 13. Measurement and Metadata Mapping
+
+### 12.1 Required / optional / unsupported table columns
+
+| FITS column | Role | Required for construction? | Model target | Absent behavior |
+|---|---|---|---|---|
+| `TIME` | timestamps | **Yes** | `TimeInfo.values` (+ metadata) | `FITSImportError` |
+| `SAP_FLUX` | SAP flux | At least one of SAP/PDCSAP | `MeasurementColumn("SAP_FLUX")` | — |
+| `PDCSAP_FLUX` | PDC flux | At least one of SAP/PDCSAP | `MeasurementColumn("PDCSAP_FLUX")` | — |
+| `SAP_FLUX_ERR` | SAP uncertainty | Optional | `SAP_FLUX.uncertainties` | `None`, warning |
+| `PDCSAP_FLUX_ERR` | PDC uncertainty | Optional | `PDCSAP_FLUX.uncertainties` | `None`, warning |
+| `SAP_QUALITY` | quality flags | Optional | `quality_flags` (int64) | `None` |
+| `CADENCENO` | cadence ids | Optional | `cadence_numbers` (int64) | `None` |
+| Other columns | — | No | Not imported | possibly noted in `notes` |
+
+SAP and PDCSAP remain independent columns, each paired with its own `*_FLUX_ERR`. Never merged. Never one silently discarded.
+
+### 12.2 Source metadata mapping
+
+| `DatasetSource` field | Proposed source | Notes |
+|---|---|---|
+| `mission` | `MISSION` header | Leave `None` if absent |
+| `instrument` | `INSTRUME` header | Leave `None` if absent |
+| `target_object` | `OBJECT` header | Leave `None` if absent |
+| `source_id` | `KEPLERID` (target ID) | Distinct from product/file ID; `None` if absent |
+| `archive` | `None` | **Not** `ORIGIN` unless supplying archive independently established |
+| `original_filename` | Actual input filename | |
+| `original_file_path` | Actual input path | |
+
+`ORIGIN=NASA/Ames` may be retained in `notes` or an informational finding, but **must not** automatically be described as the archive. Do not invent source metadata; absent/ambiguous → field unknown.
+
+### 12.3 Dataset naming
+- `LightCurveDataset.name` = input filename stem (e.g. `kplr011904151-2009131105131_llc_full`).
+- Full original filename in `DatasetSource.original_filename`; full path in `original_file_path`.
+- Do not invent a target name or scientific label when the filename is the only reliable identifier.
+- Empty/unusable stem → `FITSImportError` rather than silently inventing a name.
+
+### 12.4 Metadata not representable by current model
+Raw FITS `TTYPE`/`TFORM`/`TDISP`/`NULL` per column, full header card list, aperture image (HDU2), PDC config keywords. Not important enough to require a model change for 2.2.2; may go in `LightCurveDataset.notes` or remain out of scope. Any model-field addition is a 2.2.1-scope decision requiring approval.
+
+---
+
+## 13. Complete Validation Matrix
+
+Classifications: **Error** = `FITSImportError` raised, no dataset constructed. **Warning** = import succeeds, finding in `dataset.validation.warnings`, data preserved. **Info** = import succeeds, finding in `dataset.validation.info`, data preserved.
+
+| # | Condition | Succeeds? | Finding | Data preserved? | Raises `FITSImportError`? | User approval? |
+|---|------|---|---|---|---|---|
+| F1 | Missing / unreadable file | No | — | N/A | Yes | No |
+| F2 | Corrupted / invalid FITS structure | No | — | N/A | Yes | No |
+| F3 | No table HDU with TIME + flux column | No | — | N/A | Yes | No |
+| C1 | `TIME` column absent | No | — | N/A | Yes | No |
+| C2 | Neither `SAP_FLUX` nor `PDCSAP_FLUX` present | No | — | N/A | Yes | No |
+| C3 | Only SAP or only PDCSAP available | Yes | Info (single flux series) | Yes | No | No |
+| C4 | Flux present, matching `*_FLUX_ERR` absent | Yes | Warning (missing uncertainty) | Yes, `uncertainties=None` | No | No |
+| C5 | `*_FLUX_ERR` present but its flux absent | Yes | **Warning** (orphan uncertainty ignored) | Yes, orphan not imported | No | No |
+| C6 | `SAP_QUALITY` / `CADENCENO` absent | Yes | Optional → `None` | Yes | No | No |
+| C7 | Extra unsupported numeric columns | Yes | Not imported (possibly info) | Yes | No | No |
+| C8 | Unexpected/incompatible dtype (non-numeric where numeric required) | No | — | N/A | Yes | No |
+| C9 | Array length ≠ time length | No | — | N/A | Yes (via model `LightCurveValidationError`) | No |
+| M1 | Non-numeric timestamp | No | — | N/A | Yes | No |
+| M2 | Non-finite timestamp (NaN/inf) | Yes | Warning | Yes, preserved | No | No |
+| M3 | Non-finite flux (NaN/inf) | Yes | Warning (`n_nonfinite` + zero-based row indices) | Yes, preserved | No | No |
+| M4 | Non-finite uncertainty | Yes | Warning | Yes, preserved | No | No |
+| M5 | Negative uncertainty | Yes | Warning | Yes, preserved (not replaced) | No | No |
+| M6 | Duplicate timestamps | Yes | Warning | Yes, preserved (not reordered) | No | No |
+| M7 | Non-monotonic timestamps | Yes | Warning | Yes, preserved (order kept) | No | No |
+| Q1 | Nonzero quality flags present | Yes | Info (count + zero-based row indices) | Yes, preserved | No | No |
+| Q2 | Quality-bitmask filtering requested | N/A | Not performed in 2.2.2 | — | No | **Yes** (future policy) |
+| T1 | Missing time unit | Yes | Info | Yes, `unit=""` | No | No |
+| T2 | Missing time reference/scale/frame | Yes | Info | Yes, empty/`None` | No | No |
+| T3 | Missing flux unit | Yes | Info | Yes, `unit=""` | No | No |
+| U1 | Flux unit ≠ uncertainty unit per §7.2 table | No | — | N/A | Yes | No |
+| N1 | Integer `TNULL` sentinel present in `SAP_QUALITY`/`CADENCENO` data | No | — | N/A | Yes | No |
+| E1 | Empty table (zero observations) | No | — | N/A | Yes | No |
+| D1 | Duplicate/conflicting supported column names | No | — | N/A | Yes | No |
+
+**Note:** The undefined condition "Multiple candidate tables, no reasonable choice" has been removed. The selection policy in Section 6 always produces a deterministic result (prefer `LIGHTCURVE` among valid candidates, else first in HDU order) or raises `FITSImportError` only when no valid candidate exists (condition F3).
+
+**Scientific reasoning (§5.1, §5.6):** non-finite and questionable measurements preserved, never removed/replaced/zero-filled (§5.1.4, §5.6.1 acceptance 3). Quality flags never auto-filtered (§3.4.10; REVIEW-002 justification). File-level failures are exceptions, not `ValidationReport` errors (no dataset exists to attach to — §5.6.7).
+
+---
+
+## 14. Error-Handling Strategy
+
+- Single exception type: `FITSImportError` (subclass of `Exception`), meaningful user-facing message, chained underlying cause (`from exc`).
+- Success path: return `LightCurveDataset`; warnings/infos live in `dataset.validation`.
+- Failure path: raise `FITSImportError`; no partially populated dataset returned.
+- `LightCurveValidationError` from model construction caught and re-raised as `FITSImportError` with context.
+- Zero-based `row_indices` in every `ValidationFinding`.
+- No GUI error handling; no file-selection dialogs; caller decides presentation.
+
+---
+
+## 15. Data-Integrity and Resource-Management Approach
+
+- Open read-only (`mode="readonly"`); never open for write.
+- All array copies made **inside** the `with fits.open(...)` block before close.
+- Convert big-endian FITS dtypes to native float64/int64 via `np.array(..., dtype=..., copy=True)`; float32→float64 value-preserving.
+- Non-finite values preserved (no fill/replace/interpolate).
+- Quality flags preserved (no filtering).
+- Distinct columns remain distinct (SAP ≠ PDCSAP).
+- No observations silently discarded (observation count preserved).
+- No units or timestamps silently changed (no BKJD→JD conversion).
+- Original unit strings preserved per §7.4; no unit conversion.
+- No normalization/detrending/filtering.
+- Model's `_copy_arrays` provides a second authoritative safety copy.
+- Original FITS file bytes/checksum unchanged; file remains outside repo and unmodified.
+
+---
+
+## 16. Multiple-Candidate Selection Policy (Consolidated)
+
+The following policy is applied identically in Section 5 (HDU selection), Section 13 (validation matrix), Section 17 (tests), and Section 22 (implementation sequence):
+
+1. No structurally valid candidate → `FITSImportError`.
+2. Exactly one valid candidate → select it.
+3. Multiple valid candidates with one or more structurally valid `EXTNAME=LIGHTCURVE` candidates → prefer a `LIGHTCURVE` candidate.
+4. If multiple candidates have the same preference, select the first in HDU order.
+5. If multiple valid candidates exist and selection is resolved by this deterministic rule, import successfully and record an informational finding describing the ambiguity and selection.
+
+The undefined "no reasonable choice" failure condition does not appear anywhere in this plan. No additional selection failure mode is invented.
+
+---
+
+## 17. Focused 2.2.2 Automated Testing Plan (Corrected)
+
+Tests in a new module (`tests/test_fits_importer.py`), fixtures under pytest `tmp_path` — **no dependence on external Kepler dataset or absolute Windows paths.** Portable suite passes on any machine.
+
+### 17.1 Temporary FITS fixtures
+- Valid Kepler-like multi-HDU table (Primary + LIGHTCURVE at index 1 + APERTURE).
+- Light-curve table at a different HDU index (e.g., index 2) — verify its own `selected_hdu.header` metadata is used, not `hdul[1]`.
+- Structural table identification (by TIME + flux column, not position).
+- Multiple valid candidates with `LIGHTCURVE` preference → `LIGHTCURVE` selected, info finding recorded.
+- Multiple valid candidates without `LIGHTCURVE` → first in HDU order selected, info finding recorded.
+- No valid candidate → `FITSImportError`.
+- Missing `TIME` column → `FITSImportError`; missing both flux columns → `FITSImportError`.
+- Only `SAP_FLUX`; only `PDCSAP_FLUX`.
+- Correct uncertainty pairing (SAP↔SAP_ERR, PDCSAP↔PDCSAP_ERR).
+- Missing uncertainty column(s) → `uncertainties=None` + warning.
+- Missing optional quality/cadence columns → `None`.
+- Supported numeric dtypes and endianness (`>f4`, `>f8`, `>i4` → float64/int64).
+- Rejection of incompatible string/object types → `FITSImportError`.
+- Preservation of NaN/inf in flux and uncertainty.
+- Negative uncertainty → warning, preserved.
+- Duplicate / non-monotonic timestamps → warning, preserved, not reordered.
+- Missing metadata (no time unit, no mission) → info / `None` fields.
+- Duplicate/conflicting supported column names → `FITSImportError`.
+- Empty table (zero observations) → `FITSImportError`.
+- Corrupted / truncated / unreadable file → `FITSImportError`.
+- Integer `TNULL` sentinel declared but unused → import normally; sentinel present in data → `FITSImportError` (§11.2).
+- Successful dataset construction and model compatibility (`to_dict()`/`from_dict()` round-trip).
+- Arrays usable after FITS closure (independent of open handle).
+- Preservation of observation count and original data values.
+- Zero-based validation row indices.
+
+### 17.2 Complete unit-handling test coverage (all §7.2 branches)
+Every branch of the uncertainty-unit policy table is explicitly tested:
+
+| Flux unit | Uncertainty unit | Expected result |
+|---|---|---|
+| Present | Present and identical | Import |
+| Absent or blank | Absent or blank | Import with `unit=""` |
+| Present | Absent or blank | `FITSImportError` |
+| Absent or blank | Present | `FITSImportError` |
+| Present | Present but different | `FITSImportError` |
+
+Additional unit tests:
+- **Unfamiliar but non-empty unit string:** preserve the original string exactly; do not normalize, rewrite, or discard it.
+- **Whitespace-only unit metadata:** treat it as blank (i.e., `""`).
+- **Same preservation and blank-handling principles for `TIMEUNIT` and descriptive `TUNIT1` metadata** where applicable.
+- **Original unit strings stored:** verify `MeasurementColumn.unit` and `TimeInfo.unit` contain the original FITS `TUNITn`/`TIMEUNIT` strings, not normalized or converted values.
+
+### 17.3 Orphan uncertainty tests (consistent warning classification)
+- `SAP_FLUX_ERR` exists but `SAP_FLUX` absent → warning, orphan ignored, import succeeds.
+- `PDCSAP_FLUX_ERR` exists but `PDCSAP_FLUX` absent → warning, orphan ignored, import succeeds.
+- Orphan uncertainty never paired with another flux series.
+- Orphan uncertainty never treated as file-level import failure.
+
+### 17.4 Fixture assumptions corrected
+A normal FITS binary table has a shared row structure; columns do **not** have independently mismatched lengths. Model-level array-alignment testing remains in `tests/test_light_curve.py` (already covered there). Do not invent malformed FITS cases merely to increase test count.
+
+### 17.5 Resource-safety testing
+- Assert returned arrays remain usable after the FITS file has closed.
+- Assert returned arrays do not depend on an open FITS file handle.
+- Assert imported data remains intact after close.
+
+### 17.6 Model-only tests
+Stay in `tests/test_light_curve.py`; not duplicated in importer tests.
+
+### 17.7 Baseline
+Existing 224 tests must continue to pass with no regressions.
+
+---
+
+## 18. Optional Real-Data Verification
+
+Gated on the actual Kepler file being present. Skipped if absent — never makes the portable suite dependent on it.
+
+Verify:
+- HDU identified as LIGHTCURVE (index 1 structurally, not hardcoded).
+- 476 rows; TIME range 120.5391–130.2454; unit `d`, scale `TDB`, reference `BJD - 2454833`, frame `SOLARSYSTEM`.
+- SAP_FLUX and PDCSAP_FLUX both present and distinct; 4 and 7 non-finite respectively.
+- Uncertainties paired correctly; same non-finite rows per column.
+- `SAP_QUALITY` 37 nonzero preserved; `CADENCENO` 568–1043 consecutive.
+- `DatasetSource.original_file_path`/`original_filename` set; mission/instrument/target_object/source_id correct.
+- `name` = filename stem.
+- Valid `LightCurveDataset` constructed; `to_dict()`/`from_dict()` round-trip.
+- Original file checksum unchanged before/after import.
+
+---
+
+## 19. Documentation Impact Assessment
+
+Per `AGENTS.md`, documentation updates are required during Build mode. No documents modified now.
+
+### 19.1 2.2.2 implementation documentation (to update during Build)
+- Record `src/fits_importer.py` module and responsibilities.
+- Record public interface (`import_light_curve`, `FITSImportError`) and error behavior.
+- Record supported FITS structure and column/metadata mapping (including units, time metadata, null handling).
+- Record validation behavior, classifications, and limitations.
+- Record focused test coverage and results.
+- Update `docs/MASTER_DEVELOPMENT_ROADMAP.md` (2.2.2 status) and `docs/development/DEVELOPMENT_LOG.md` (implementation record, test results).
+
+### 19.2 2.2.4 consolidation (future)
+- Broader documentation reconciliation across subtasks; cross-subtask completion status; overall Stage 2.2 verification; remaining deferred/unresolved items.
+
+Foundation documents remain read-only. `docs/README.md` unchanged unless a significant document is added/renamed. Existing project-lifecycle docs unchanged.
+
+---
+
+## 20. Explicit Subtask Boundaries
+
+| Subtask | Responsibility | In 2.2.2? |
+|---|---|---|
+| 2.2.1 | Light-curve data model — done | No (reused only) |
+| 2.2.2 | FITS reading, HDU identification, extraction, metadata, validation, `LightCurveDataset` construction, importer tests | **Yes — current** |
+| 2.2.3 | Project association, dataset persistence, save/reopen, project IDs/ownership/permissions | No (future) |
+| 2.2.4 | Broader Stage 2.2 verification, documentation reconciliation, completion assessment | No (future) |
+
+**Excluded from 2.2.2:** project association/persistence, visualization, BLS/analysis, quality-bitmask filtering, archive downloads, universal FITS framework, database/permanent storage, GUI dialogs.
+
+---
+
+## 21. Risks and Unresolved Issues
+
+| Risk / Issue | Description | Mitigation / Status |
+|---|---|---|
+| Memory-mapped FITS arrays | Post-close access fails if not copied. | Copy arrays inside `with` block. |
+| Big-endian FITS dtypes | Convert to native float64/int64. | `np.array(..., dtype=..., copy=True)` handles byte swap. |
+| Float32 → float64 upcast | Value-preserving, doubles flux memory. | Acceptable at ~476 rows. |
+| Model re-copies arrays | Slight redundancy. | Acceptable; correctness > micro-optimization. |
+| Real dataset not portable | Automated suite must not depend on absolute path. | Gate real-data test on file presence; `tmp_path` fixtures. |
+| Validation vs exception boundary | Risk of putting import failures into nonexistent dataset's `ValidationReport`. | Enforce separation (Section 14). |
+| Quality-bitmask pressure | Temptation to auto-filter nonzero flags. | Explicitly excluded; future analysis operation requiring approval. |
+| Scope creep | Pressure to add persistence, UI, visualization, BLS. | Explicitly excluded. |
+| Flux/uncertainty unit mismatch | Model has no separate uncertainty-unit field. | Raising `FITSImportError` (§7.2) — no model change. |
+| Integer `TNULL` sentinel in data | Model cannot represent per-row missing integers. | Raising `FITSImportError` (§11.2) — no model change; Kepler file has no TNULL so does not block initial implementation. |
+
+---
+
+## 22. Recommended Build Implementation Sequence
+
+1. Create `src/fits_importer.py`: `FITSImportError`, `import_light_curve()`, FITS opening/close, structural HDU identification (Section 5).
+2. Implement header metadata extraction from `selected_hdu.header` and `selected_hdu.columns` (Section 6), not `hdul[1]`.
+3. Implement extraction of `TIME`, `SAP_FLUX`/`PDCSAP_FLUX`, uncertainties, `SAP_QUALITY`, `CADENCENO` (array copies inside `with` block; per-column units from `TUNITn`).
+4. Implement unit cross-check (§7.2) and integer `TNULL` policy (§11.2).
+5. Implement metadata extraction into `DatasetSource` and `TimeInfo` (BKJD/TDB/SOLARSYSTEM; time unit from `TIMEUNIT`, reference from descriptive `TUNIT1` per §8; filename-stem naming).
+6. Implement validation findings and `ValidationReport`; dataset assembly via `LightCurveDataset` constructor; surface `LightCurveValidationError` as `FITSImportError`.
+7. Implement multiple-candidate selection policy (§16) consistently across code and tests.
+8. Create focused importer tests with `tmp_path` fixtures (Section 17), including all unit-handling branches and orphan-uncertainty warning tests.
+9. Optional real-data verification against Kepler file, gated on presence (Section 18).
+10. Run full suite (224+ passing, no regressions).
+11. Update documentation per `AGENTS.md` — Build-mode activity (Section 19).
+12. Review completion; hand off to 2.2.3.
+
+Deferred to 2.2.3: project association, persistence, save/reopen. Deferred to 2.2.4: broader integration verification and documentation reconciliation.
+
+---
+
+## 23. Decisions or Questions Requiring User Approval
+
+1. **Approval of this revised plan** before switching to Build mode (the gate itself).
+2. No additional decisions require approval. All open points from prior revisions are resolved by explicit policy in this document:
+   - Extension-header selection via `selected_hdu.header` (any HDU index) — Section 6.
+   - Multiple-candidate selection policy — Section 16, consistent everywhere.
+   - Uncertainty-unit mismatch → `FITSImportError`, no model extension — Section 7.2.
+   - Original unit-string preservation — Section 7.4.
+   - Header inheritance vs application fallback — Section 9.
+   - Time unit vs time reference — Section 8.
+   - Integer `TNULL` sentinel in data → `FITSImportError`, no model change — Section 11.2.
+   - Orphan uncertainty → warning consistently — Section 12.1.
+
+---
+
+## Remaining Assumptions or Unresolved Decisions
+
+**No implementation-critical uncertainties remain.** All four correction areas have been resolved by explicit policy:
+
+1. **Extension-header selection:** `selected_hdu.header` used for all extension-specific metadata; no fixed-index assumption; light-curve table may be at any HDU index (Sections 5–6).
+2. **Multiple-candidate inconsistency:** The undefined "no reasonable choice" condition removed; a single deterministic selection policy (§16) is applied consistently across HDU selection, validation matrix, tests, and implementation sequence.
+3. **Unit-handling test coverage:** All five branches of the uncertainty-unit policy are explicitly tested, plus unfamiliar unit string preservation, whitespace-only units, and `TIMEUNIT`/`TUNIT1` preservation principles (Section 17.2).
+4. **Orphan uncertainty handling:** Consistently classified as **warning** everywhere (validation matrix, test plan, implementation sequence) (Section 12.1).
+
+The only gate is user approval of this plan before switching to Build mode. No code, tests, or repository changes have been made in this session.
+
+---
+
+## Final Readiness Assessment
+
+The plan is **internally consistent** and **ready for user approval** to enter BUILD mode. All four review findings have been addressed:
+
+- ✅ Extension-header selection corrected to `selected_hdu.header` (no fixed index 1).
+- ✅ Multiple-candidate policy made consistent across all sections; "no reasonable choice" removed.
+- ✅ Complete unit-handling test coverage for all policy branches, unfamiliar strings, whitespace-only units, and `TIMEUNIT`/`TUNIT1` preservation.
+- ✅ Orphan uncertainty handling consistently classified as **warning**.
+
+No contradictions, obsolete wording, or fixed-index references remain. All scope boundaries are preserved. The plan awaits explicit user authorization before any switch to Build mode.
+
+---
+
+**Statement:** Implementation has not started. No files were created, modified, deleted, or renamed in this session; no dependencies installed; no configuration changed; the original FITS file untouched; no Git state altered by me. This revised plan remains in PLAN mode and awaits your explicit review and authorization before any switch to Build mode.
+
+
+# chatgpt plan v6 review
+
+The revised plan is substantially improved and is close to BUILD approval. The four correction areas are addressed, and the scope, test strategy, and data-preservation policies are coherent.
+
+There is one remaining implementation-level contradiction in Section 7.5 that should be corrected before BUILD.
+
+## Remaining issue: uncertainty units cannot be stored separately
+
+The plan correctly establishes that `MeasurementColumn` has only one `unit` field shared by measurement values and uncertainties.
+
+However, Section 7.5 says:
+
+> `SAP_FLUX.uncertainties` unit ← original `TUNIT5` string
+
+And similarly for `PDCSAP_FLUX.uncertainties` and `TUNIT9`.
+
+That is not possible with the existing model. There is no separate uncertainty-unit field.
+
+The intended behavior should be:
+
+1. Read the flux and uncertainty units independently from their respective FITS columns.
+2. Apply the Section 7.2 compatibility checks.
+3. If compatible, store the flux unit in `MeasurementColumn.unit`.
+4. The uncertainty values use that same unit by the model's design.
+5. Do not attempt to assign or store a separate uncertainty unit.
+
+This preserves the existing model and the approved unit policy.
+
+## Send Nemotron this final correction
+
+Make one final, narrow correction to the Subtask 2.2.2 implementation plan. Remain in PLAN mode. Do not implement or edit files.
+
+**Issue: Section 7.5 describes assigning uncertainty units separately, which the existing `MeasurementColumn` model cannot support.**
+
+The model has one `unit` field shared by measurement values and uncertainties. There is no separate uncertainty-unit field.
+
+Correct Section 7.5 so that:
+
+1. The importer reads the flux unit and uncertainty unit independently from their respective FITS `TUNITn` metadata.
+2. It applies the compatibility policy in Section 7.2 before constructing the measurement column.
+3. When the units are compatible, `MeasurementColumn.unit` receives the original flux unit string.
+4. The uncertainty array is attached to that measurement column and shares its unit by the existing model design.
+5. The importer does not attempt to assign, store, or represent a separate uncertainty unit.
+
+Preserve all existing Section 7.2 rules:
+
+- Both present and identical: import.
+- Both absent or blank: import with `unit=""`.
+- Only one present: raise `FITSImportError`.
+- Both present but different: raise `FITSImportError`.
+
+Update any wording elsewhere in the plan that implies uncertainty units are stored independently. Do not change the model, expand scope, or alter any other approved policy.
+
+Return the complete corrected Section 7.5 and identify any other wording changed. Confirm that the plan remains internally consistent. No implementation or repository changes.
+
+## Readiness after that correction
+
+Once this is corrected, I expect the plan to be ready for BUILD approval. I don't see a reason to reopen the architecture or expand the scope.
+
+One distinction: the uploaded repository snapshot I inspected earlier did not contain the model files, so the latest direct repository verification in Nemotron's report is useful, but I have not independently reproduced those checks against a live working tree.
+
+After Nemotron returns the correction, send it here. I can give the final approval assessment before you authorize BUILD.
+
+# chatgpt prompt from v6 review
+
+Make one final, narrow correction to the Subtask 2.2.2 implementation plan. Remain in PLAN mode. Do not implement or edit files.
+
+**Issue: Section 7.5 describes assigning uncertainty units separately, which the existing `MeasurementColumn` model cannot support.**
+
+The model has one `unit` field shared by measurement values and uncertainties. There is no separate uncertainty-unit field.
+
+Correct Section 7.5 so that:
+
+1. The importer reads the flux unit and uncertainty unit independently from their respective FITS `TUNITn` metadata.
+2. It applies the compatibility policy in Section 7.2 before constructing the measurement column.
+3. When the units are compatible, `MeasurementColumn.unit` receives the original flux unit string.
+4. The uncertainty array is attached to that measurement column and shares its unit by the existing model design.
+5. The importer does not attempt to assign, store, or represent a separate uncertainty unit.
+
+Preserve all existing Section 7.2 rules:
+- Both present and identical: import.
+- Both absent or blank: import with `unit=""`.
+- Only one present: raise `FITSImportError`.
+- Both present but different: raise `FITSImportError`.
+
+Update any wording elsewhere in the plan that implies uncertainty units are stored independently. Do not change the model, expand scope, or alter any other approved policy.
+
+Return the complete corrected Section 7.5 and identify any other wording changed. Confirm that the plan remains internally consistent. No implementation or repository changes.
+
+# opencode plan v7
+
+**Corrected Section 7.5 — Application to specific fields**
+
+For each supported flux/uncertainty pair (`SAP_FLUX`/`SAP_FLUX_ERR`, `PDCSAP_FLUX`/`PDCSAP_FLUX_ERR`):
+
+1. Read the **flux unit** independently from the flux column's `TUNITn` (`TUNIT4` for `SAP_FLUX`; `TUNIT8` for `PDCSAP_FLUX`).
+2. Read the **uncertainty unit** independently from the uncertainty column's `TUNITn` (`TUNIT5` for `SAP_FLUX_ERR`; `TUNIT9` for `PDCSAP_FLUX_ERR`).
+3. Apply the compatibility policy in Section 7.2 **before** constructing the `MeasurementColumn`:
+   - Both units present and identical → proceed; `MeasurementColumn.unit` receives the original flux unit string.
+   - Both units absent or blank → proceed; `MeasurementColumn.unit` is `""`.
+   - Only one unit present → raise `FITSImportError`.
+   - Both units present but different → raise `FITSImportError`.
+4. When compatible, `MeasurementColumn.unit` receives the original flux unit string (preserved as-is per Section 7.4; `""` if absent or blank).
+5. The uncertainty array is attached to that `MeasurementColumn` and **shares its unit** by the existing model design.
+6. The importer does **not** assign, store, or represent a separate uncertainty unit. `MeasurementColumn` has a single `unit` field and no separate uncertainty-unit field.
+
+---
+
+**Other wording changed elsewhere**
+
+- **Section 7.4 ("Unit-string preservation")**: The heading is narrowed to "Unit-string preservation (stored unit fields)" and the first bullet is clarified to state that preservation applies to unit fields actually stored in the model — `MeasurementColumn.unit` for flux values and `TimeInfo.unit` for time values. Uncertainty units are read solely for the Section 7.2 compatibility check and are **not** stored, because `MeasurementColumn` has no separate uncertainty-unit field.
+
+No other sections imply independent uncertainty-unit storage. Section 7.1 already states correctly that `MeasurementColumn` has one `unit` field shared by values and uncertainties. Section 6 (header metadata) correctly describes reading `TUNITn` from `selected_hdu.columns` for the compatibility check without implying separate storage. Section 13 (validation matrix) and Section 17.2 (unit-handling tests) describe the compatibility policy, not separate storage.
+
+**Internal consistency confirmation**
+
+The plan remains internally consistent. Section 7.2's compatibility rules are unchanged and are now correctly applied before column construction in Section 7.5. `MeasurementColumn.unit` receives only the flux unit string when compatible; the uncertainty array shares that unit by model design. No separate uncertainty-unit field is introduced, no model change is proposed, and no other approved policy is altered.
+
+No implementation or repository changes were made. This remains PLAN mode; no files were created, modified, deleted, or renamed.
+
+# chatgpt plan 7 review
+
+The correction resolves the remaining model-mapping contradiction.
+
+Section 7.5 is now consistent with the existing `MeasurementColumn` model:
+
+- Flux and uncertainty units are read independently.
+- Section 7.2 compatibility is checked before constructing the measurement column.
+- The flux unit is stored in `MeasurementColumn.unit`.
+- The uncertainty array shares that unit through the existing model.
+- No separate uncertainty-unit field or model change is introduced.
+- Section 7.4 now explicitly distinguishes stored units from validation-only uncertainty units.
+
+I don't see another blocking issue in the correction provided. The scope and previously approved policies remain unchanged.
+
+PLAN ready for BUILD
+
+Next step: If this reflects the complete revised plan, you can authorize Nemotron to enter BUILD mode for Subtask 2.2.2. Keep the implementation limited to the approved files, tests, and documentation updates. Do not begin Subtask 2.2.3.
+
+
+# me to chatgpt
+
+Now give me the build prompt to have it perform all necessary tasks for 2.2.2 as we have planned with the reviewed corrections
+
+# chatgpt BUILD prompt from plan v7
+
+Use the following as the BUILD prompt for Nemotron. It incorporates the reviewed 2.2.2 plan, including the corrected uncertainty-unit handling, and explicitly limits implementation scope.
+
+# BUILD — Subtask 2.2.2: FITS Light-Curve Importer
+
+**Authorization:** BUILD is approved for Subtask 2.2.2 only.
+
+Implement the reviewed and approved Subtask 2.2.2 plan. Treat the latest corrected PLAN as the implementation specification, including all corrections and clarifications reviewed with ChatGPT.
+
+Do not redesign the plan, expand scope, or begin Subtask 2.2.3.
+
+## 1. Required pre-implementation checks
+
+Before editing:
+
+1. Read and follow `AGENTS.md`.
+2. Inspect the current repository state and confirm the active branch and working-tree changes.
+3. Review the relevant project documentation:
+   - `docs/README.md`
+   - `docs/MASTER_DEVELOPMENT_ROADMAP.md`
+   - `docs/development/DEVELOPMENT_LOG.md`
+   - Relevant unresolved questions and decision records.
+   - Relevant Foundation documents using `docs/Foundation/0_index.md`.
+4. Inspect the existing:
+   - `src/light_curve.py`
+   - `tests/test_light_curve.py`
+   - Related project structure and test conventions.
+5. Run the existing test suite before implementation and record the baseline.
+
+Do not overwrite or discard existing user changes. Do not modify Foundation documents.
+
+If the actual repository state conflicts with the reviewed plan, stop and report the discrepancy before making changes.
+
+## 2. Implementation scope
+
+Create:
+
+- `src/fits_importer.py`
+- `tests/test_fits_importer.py`
+
+Implement the public interface:
+
+- `FITSImportError`
+- `import_light_curve(file_path: str | os.PathLike[str]) -> LightCurveDataset`
+
+Use the existing light-curve model in `src/light_curve.py`.
+
+Use the already available project dependencies, including Astropy and NumPy. Do not add dependencies unless the reviewed plan explicitly requires them.
+
+The importer must read FITS files and construct a validated `LightCurveDataset`. It must not implement persistence, project association, GUI integration, BLS analysis, or other later-subtask functionality.
+
+## 3. FITS file handling and HDU selection
+
+- Open FITS files read-only.
+- Use a context manager and ensure the file is closed after import.
+- Identify candidate binary-table HDUs structurally.
+- A valid candidate must contain `TIME` and at least one supported flux column: `SAP_FLUX` or `PDCSAP_FLUX`.
+- Prefer an HDU named `LIGHTCURVE` only when it satisfies the structural requirements.
+- Otherwise, select the first structurally valid candidate in HDU order.
+- If multiple valid candidates exist, record the planned informational validation finding.
+- Do not assume the selected table is always `hdul[1]`.
+- Use the selected HDU's own header and columns for extension metadata.
+
+If no valid candidate exists, raise `FITSImportError` with a useful explanation.
+
+## 4. Column mapping
+
+Map the supported columns as specified in the reviewed plan:
+
+- `TIME` → `TimeInfo.values`
+- `SAP_FLUX` → measurement column when present
+- `SAP_FLUX_ERR` → uncertainties for `SAP_FLUX` when present
+- `PDCSAP_FLUX` → measurement column when present
+- `PDCSAP_FLUX_ERR` → uncertainties for `PDCSAP_FLUX` when present
+- `SAP_QUALITY` → optional `quality_flags`
+- `CADENCENO` → optional `cadence_numbers`
+
+Preserve SAP and PDCSAP measurements independently. Do not substitute one for the other.
+
+If an uncertainty column exists without its corresponding flux column, follow the reviewed plan's orphan-uncertainty warning behavior.
+
+Ignore unsupported columns rather than inventing mappings for them.
+
+Do not filter, remove, reorder, or silently discard observations.
+
+## 5. Metadata mapping
+
+Follow the reviewed plan's explicit header-source policy:
+
+- Use the primary header for source metadata, with the specified application-level fallback to the selected extension header where applicable.
+- Use the selected extension header for time metadata.
+- Do not assume FITS header inheritance or implicit header merging.
+- Do not use `ORIGIN` as the archive field automatically.
+
+Populate the existing model fields only when the source provides the corresponding information.
+
+For time metadata:
+
+- `TIMEUNIT` → `TimeInfo.unit`
+- Descriptive `TUNIT1` → `TimeInfo.reference`, when applicable
+- `TIMESYS` → time scale
+- `TIMEREF` → reference frame
+- `BJDREFI` and `BJDREFF` → numeric reference offset
+- `TSTART` and `TSTOP` → start and stop
+- Map `TIMEDEL` only if its meaning and units are verified by the reviewed plan.
+
+Do not convert BKJD values to BJD or otherwise transform the time values. Preserve the original time values and represent their reference metadata separately.
+
+Use the original filename and file path in the appropriate source fields. Use the filename stem for the dataset name, as specified in the plan.
+
+Do not invent missing metadata or substitute undocumented defaults.
+
+## 6. Numeric types and data preservation
+
+Follow the reviewed type rules:
+
+- Convert supported time, flux, and uncertainty arrays to `float64`.
+- Convert supported quality-flag and cadence arrays to `int64`.
+- Do not silently truncate floating-point values into integer arrays.
+- Reject incompatible source data types with `FITSImportError`.
+- Preserve NaN and infinite floating-point values.
+- Preserve quality flags and cadence values without interpreting or filtering them.
+
+Use the existing model's construction behavior and validation. Do not modify the scientific model to accommodate the importer.
+
+## 7. Unit handling — important reviewed correction
+
+Implement the reviewed unit policy exactly.
+
+### 7.1 Measurement and uncertainty units
+
+For each supported pair:
+
+- `SAP_FLUX` / `SAP_FLUX_ERR`
+- `PDCSAP_FLUX` / `PDCSAP_FLUX_ERR`
+
+Read the flux and uncertainty units independently from their respective column `TUNITn` metadata.
+
+Apply the compatibility policy before constructing the `MeasurementColumn`:
+
+| Flux unit       | Uncertainty unit      | Required behavior       |
+| --------------- | --------------------- | ----------------------- |
+| Present         | Identical and present | Import                  |
+| Blank or absent | Blank or absent       | Import with `unit=""`   |
+| Present         | Blank or absent       | Raise `FITSImportError` |
+| Blank or absent | Present               | Raise `FITSImportError` |
+| Present         | Different and present | Raise `FITSImportError` |
+
+Preserve nonblank original unit strings exactly as supplied. Do not perform unit conversion.
+
+**Critical model constraint:** `MeasurementColumn` has one `unit` field shared by its measurement values and uncertainty array.
+
+Therefore:
+
+- `MeasurementColumn.unit` receives the original flux unit string when compatible.
+- If both units are blank or absent, `MeasurementColumn.unit` receives `""`.
+- The uncertainty array is attached to that same `MeasurementColumn` and shares its unit.
+- The uncertainty unit is used only for compatibility validation.
+- Do not assign, store, or represent a separate uncertainty unit.
+- Do not add an `uncertainty_unit` field or modify `src/light_curve.py`.
+
+Add tests confirming this behavior.
+
+### 7.2 Time units
+
+Preserve the original nonblank time-unit string in `TimeInfo.unit`. Use `""` when the source unit is absent or blank.
+
+Do not discard unfamiliar but nonblank unit strings merely because they are not recognized by an external unit library.
+
+## 8. FITS integer null sentinels
+
+Follow the reviewed `TNULL` policy for supported integer columns:
+
+- If a supported integer column declares a null sentinel and that sentinel does not occur in the data, import normally.
+- If the declared sentinel occurs in the data, raise `FITSImportError`.
+- Do not silently convert sentinel values to zero, remove observations, or invent missing-value handling.
+- Do not modify the existing model to introduce per-row missingness.
+
+Test both sentinel cases.
+
+## 9. Validation findings
+
+Preserve the observations and report the applicable findings using the existing `ValidationReport` and `ValidationFinding` structures.
+
+Follow the reviewed plan:
+
+- Non-finite time, flux, or uncertainty values: warning; preserve values.
+- Negative uncertainty values: warning; preserve values.
+- Duplicate times: warning; preserve order.
+- Non-monotonic times: warning; preserve order.
+- Nonzero quality flags: informational finding; do not filter observations.
+- Multiple valid candidate HDUs: informational finding.
+- Orphan uncertainty columns: warning.
+- Missing optional columns: follow the validation matrix in the reviewed plan.
+
+Use zero-based row indices where applicable.
+
+Do not introduce additional scientific interpretation or automatic data cleaning.
+
+## 10. Tests
+
+Create portable tests in `tests/test_fits_importer.py` using temporary FITS fixtures.
+
+Tests must not depend on the user's external Kepler FITS file or any other machine-specific path.
+
+Cover the reviewed plan's requirements, including:
+
+- Successful import with SAP data.
+- Successful import with PDCSAP data.
+- Import with both supported flux columns.
+- Optional uncertainty columns.
+- Optional quality and cadence columns.
+- Missing optional columns.
+- No structurally valid light-curve HDU.
+- Multiple candidate HDUs.
+- `LIGHTCURVE` preference among valid candidates.
+- Selection of a valid HDU that is not at index 1.
+- Metadata mapping and header-source behavior.
+- Missing and blank units.
+- Compatible flux and uncertainty units.
+- Every incompatible unit-policy case.
+- Preservation of unfamiliar nonblank unit strings.
+- Whitespace-only unit strings.
+- Correct storage of the flux unit in the single `MeasurementColumn.unit` field.
+- Uncertainty arrays attached to their corresponding measurement columns.
+- Orphan uncertainty warnings.
+- Numeric type conversion and incompatible dtype rejection.
+- Non-finite values.
+- Negative uncertainties.
+- Duplicate and non-monotonic times.
+- Nonzero quality flags.
+- Integer `TNULL` sentinel declared but unused.
+- Integer `TNULL` sentinel present in data.
+- FITS data remaining usable after the file is closed.
+- Serialization round-trip through the existing model.
+
+Use assertions that verify actual behavior and data preservation. Do not weaken existing tests or replace meaningful assertions with superficial checks.
+
+## 11. Documentation updates
+
+Follow `AGENTS.md` documentation-maintenance requirements.
+
+Update the applicable sections of:
+
+- `docs/MASTER_DEVELOPMENT_ROADMAP.md`
+- `docs/development/DEVELOPMENT_LOG.md`
+
+Document the completion and verified behavior of Subtask 2.2.2, including relevant implementation details, tests, and limitations.
+
+Do not modify Foundation documents.
+
+Do not prematurely perform the broader documentation consolidation and completion review assigned to Subtask 2.2.4. However, do not omit documentation updates required for this BUILD task.
+
+## 12. Verification
+
+After implementation:
+
+1. Run the focused importer tests:\
+   `python -m pytest tests/test_fits_importer.py -v`
+2. Run the existing light-curve model tests:\
+   `python -m pytest tests/test_light_curve.py -v`
+3. Run the complete test suite:\
+   `python -m pytest -q`
+4. Confirm that the existing baseline of 224 passing tests remains intact, with the new importer tests added.
+5. Investigate and fix failures caused by this implementation.
+6. Do not conceal failures, skip tests, or weaken assertions to obtain a passing result.
+
+If the environment prevents a test from running, report that limitation explicitly rather than claiming success.
+
+## 13. Scope restrictions
+
+Do not:
+
+- Modify `src/light_curve.py` or its existing model behavior.
+- Modify existing tests except where a directly necessary compatibility issue is identified and explained before making the change.
+- Begin Subtask 2.2.3.
+- Implement database persistence or project association.
+- Implement GUI integration.
+- Implement BLS or other analysis.
+- Add unrelated abstractions, dependencies, or features.
+- Modify Foundation documents.
+- Commit, amend, or push Git changes.
+- Overwrite or discard unrelated user changes.
+
+If an unexpected issue requires a scope change, stop and report it rather than making an unapproved design change.
+
+## 14. Final BUILD report
+
+When finished, provide:
+
+1. Summary of implementation.
+2. Files created and modified.
+3. Important implementation decisions and how they follow the reviewed plan.
+4. Focused test results.
+5. Full test-suite result, including the baseline comparison.
+6. Documentation updates made.
+7. Known limitations or unresolved issues.
+8. Confirmation that no commits or pushes were made.
+9. Confirmation that Subtask 2.2.3 was not started.
+
+Clearly distinguish verified results from assumptions or unverified claims.
+
+**Begin BUILD now, following this specification and the reviewed plan.**
+
+After Nemotron completes, bring its full BUILD report and any relevant implementation output back here. The next review should verify the actual changes against the approved plan, not just rely on its completion summary.
+
+# opencode BUILD report v1, from plan v7
+
+
+
+# chatgpt REVIEW of build report v1
