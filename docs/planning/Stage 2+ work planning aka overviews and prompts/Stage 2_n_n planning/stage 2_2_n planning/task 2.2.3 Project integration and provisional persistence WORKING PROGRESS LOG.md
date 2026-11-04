@@ -3064,57 +3064,781 @@ Do not begin implementation. Wait for explicit user authorization.
 
 # OpenCode — Revised Plan (Version 3)
 
-[Paste complete OpenCode response.]
+## A. Save consistency and commit point
+
+**Verified fact (from `src/project_repository.py`):** `ProjectRepository.save(metadata)` validates metadata, writes `project.json` atomically via `_write_json_atomic` (temp file + `os.replace` + `fsync` in the same directory), then calls `metadata.mark_clean()`. The clean-state transition happens inside the repository method, immediately after `project.json` replacement. There is currently no way to save `project.json` without marking clean.
+
+**Commit-point conflict (corrected):** In the previous plan, the manifest was described as both (a) independently authoritative on project open and (b) committed only after `project.json` is saved. These conflict: once `manifest.json` is atomically replaced, its dataset associations are visible on the next project open regardless of whether `project.json` was saved. The commit point must be unambiguous.
+
+**Revised commit-point design:**
+
+The **manifest replacement is the commit point for dataset visibility**. Dataset files must be finalized (present at their final paths) *before* the manifest is replaced, so the manifest never references a missing file. `project.json` is saved earlier in the sequence without marking the project clean; the project is marked clean only after the manifest replacement succeeds.
+
+Revised ordered save sequence (when datasets are present):
+
+1. **Serialize + validate all runtime datasets** in memory (build `to_dict()` payloads). Fail fast: nothing written to disk, project stays dirty.
+2. **Stage dataset files:** write each payload to a temporary file inside the project's `datasets/` directory (temp name, not final path). Record each `(temp_path, final_path)`. If any stage fails, remove staged temp files, raise, project stays dirty; no final dataset files or manifest changes exist.
+3. **Prepare new manifest content** in-memory (dataset_id → final relative path, name, imported_at, source summary). This cannot touch disk.
+4. **Save `project.json` via `repo.save(metadata, mark_clean=False)`:** writes `project.json` atomically but defers the clean transition. If this fails, clean up staged temp files, raise, project stays dirty; `project.json` and manifest both unchanged (atomic write leaves prior valid file intact).
+5. **Finalize dataset files:** `os.replace(temp_path, final_path)` for each staged dataset. Final dataset files now exist at paths the manifest will reference. If any finalization fails, remove remaining temp files, raise; manifest not yet replaced, so partially finalized files are unreferenced orphans (preserved, not loaded, not auto-deleted).
+6. **Atomically replace the manifest:** write prepared manifest to a temp file in `datasets/`, then `os.replace` over `manifest.json`. **This is the commit point.** After this succeeds, dataset associations are visible on reopen.
+7. **Mark the project clean:** `metadata.mark_clean()` (in-memory, cannot fail).
+
+If the process crashes between steps 6 and 7, the manifest is committed (datasets visible on reopen) but the in-memory dirty flag is lost. This is an acceptable crash-recovery limitation for the provisional slice.
+
+**Smallest change to `ProjectRepository`:** add a `mark_clean: bool = True` parameter to `save()`. Existing callers (`create_project`, non-dataset `save_project`) keep default `True` — no behavior change. Coordinated save passes `mark_clean=False`. No existing atomic-write guarantee is weakened.
+
+**Commit point summary table:**
+
+| Write | Commit point for... | Visible on reopen if this step fails? |
+|---|---|---|
+| Dataset temp files | Nothing (staging only) | No — never referenced by manifest |
+| `project.json` (mark_clean=False) | Project metadata changes only | Yes (metadata), but **not datasets** — manifest still old |
+| Finalized dataset files | Nothing (not yet referenced) | No — manifest still old, files are orphans |
+| `manifest.json` replacement | **Dataset associations** | Yes — this is the commit point |
+| `mark_clean()` | Dirty state | N/A (in-memory) |
+
+---
+
+## B. Failure, retry, and Discard semantics
+
+**Dataset staging fails (step 2):**
+- Disk: temp files may partially exist in `datasets/`; no final dataset files; manifest unchanged; `project.json` unchanged.
+- Authoritative manifest: previous manifest (or none).
+- Reopen: no new datasets visible. Project stays dirty. Error surfaced to caller/UI.
+
+**Manifest preparation fails (step 3):** In-memory only; cannot meaningfully fail disk. Treated as a validation error before any write. Project stays dirty; nothing on disk changed.
+
+**Project metadata save fails (step 4):**
+- Disk: `project.json` remains the prior valid version (atomic write); staged temp files cleaned up; manifest unchanged.
+- Authoritative manifest: previous manifest.
+- Reopen: prior project metadata and prior datasets. Project stays dirty.
+
+**Final manifest replacement fails (step 6):**
+- Disk: final dataset files exist at `datasets/<uuid>.json`; manifest is the **previous** version (or absent); `project.json` may be the new version (saved in step 4).
+- Authoritative manifest: previous manifest — does **not** reference the new datasets.
+- Reopen: new datasets are **not** visible (unreferenced orphans preserved on disk). Project stays dirty. The user's dataset addition did not silently commit.
+
+**Application closes after a failed save:**
+- Project is still dirty. `MainWindow._on_close_project()` presents Save/Discard/Cancel (existing behavior). No dataset files are deleted by closing.
+
+**User chooses Discard after a failed save:**
+- Discard clears in-memory runtime state (active project, dataset collection, dirty flag). It does **not** revert files already on disk (`project.json` may contain metadata changes written in step 4; orphan dataset files remain).
+- Reopen: project loads from `project.json` (possibly new metadata version) and the previous manifest. No uncommitted dataset additions reappear, because the manifest was never replaced. ✅ Satisfies the core guarantee: "a failed save must not silently make unsaved dataset additions appear as committed project data after reopening."
+- Limitation: metadata changes already written to `project.json` are not reverted by Discard (consistent with existing close behavior, which does not roll back `project.json`). This is documented.
+
+**User retries the save after a failed save:**
+- Retry re-runs the full coordinated sequence. Dataset files with the same `dataset_id` are overwritten idempotently. New temp files staged, manifest prepared, `project.json` re-saved, manifest replaced, marked clean. Orphan temp files from the failed attempt may remain (preserved, not auto-deleted).
+
+**Core guarantee:** The manifest is never replaced until all dataset files are finalized at their final paths. Therefore a failed coordinated save never leaves a manifest referencing datasets that aren't committed. Orphan dataset files may exist on disk but are never loaded because they're unreferenced.
+
+---
+
+## C. ProjectService dirty-state coordination
+
+**Verified fact:** `ProjectService` holds `_active_project` (`ProjectMetadata`) and `_active_location`. `save_project()` calls `repo.save()` which marks clean. `close_project()` clears `_active_project` and `_active_location`. `add_dataset` does not exist today.
+
+**Proposed `ProjectService` responsibilities:**
+
+| Responsibility | Proposed implementation |
+|---|---|
+| Runtime dataset collection | Private `dict[str, LightCurveDataset]` keyed by `dataset_id`, owned by the active project only. |
+| Associate imported dataset | `add_dataset(dataset: LightCurveDataset) -> str`: reject duplicate `dataset_id`; store in collection; `metadata.mark_dirty()`. Return `dataset_id`. |
+| Retrieve/list datasets | `get_dataset(dataset_id) -> LightCurveDataset | None`; `list_datasets() -> list[LightCurveDataset]`. |
+| Load datasets on open | After `repo.load()` in `open_project()`/`open_project_from_path()`, invoke the dataset repository to load the manifest + dataset files into the runtime collection. Failures isolated per dataset and recorded in a load report. |
+| Persist datasets on save | In `save_project()`, when datasets exist: execute the coordinated save sequence (stage datasets → prepare manifest → `repo.save(metadata, mark_clean=False)` → finalize dataset files → replace manifest → `mark_clean()`). When no datasets: existing `repo.save(metadata)` behavior unchanged. |
+| Clear runtime state on close/switch | `close_project()` also clears the dataset collection. On project switch, previous project's datasets are cleared before the new project's are loaded — no cross-project leakage. |
+| Dirty marking on dataset addition | `add_dataset()` marks `metadata.is_dirty = True` — scoped extension of the existing mechanism (currently only `set_name`/`set_status` mark dirty). No new infrastructure. |
+
+**Separation of concerns:** A new dataset repository module handles file I/O (atomic writes/reads, path validation, version checks). `ProjectService` manages lifecycle, dirty state, active-project gating, and error translation to existing exceptions (`ProjectRepositoryError`, etc.). `LightCurveDataset` remains untouched and independent of persistence/GUI.
+
+---
+
+## D. Load diagnostics
+
+**Problem to avoid:** A corrupted manifest must not be silently treated as an empty dataset collection (that hides data loss and prevents recovery). Callers must be able to distinguish four states.
+
+**Proposed design:** `ProjectService.open_project()` / `open_project_from_path()` return `ProjectMetadata` unchanged (preserving existing caller signatures). After opening, the service populates a `DatasetLoadReport` on itself, queryable by callers/tests:
+
+```python
+@dataclass
+class DatasetLoadFailure:
+    dataset_id: str
+    reason: str  # e.g. "missing_file", "corrupted_json", "unsupported_version", "validation_failed"
+
+@dataclass
+class DatasetLoadReport:
+    manifest_status: str          # "missing" | "ok" | "corrupted"
+    loaded_dataset_ids: list[str] # successfully loaded
+    failures: list[DatasetLoadFailure]
+    missing_files: list[str]      # dataset_ids whose files are absent
+    corrupted_files: list[str]    # dataset_ids whose files failed to parse/validate
+    unsupported_versions: list[str]  # dataset_ids with unrecognized format versions
+```
+
+Accessed via a property on `ProjectService` (e.g. `last_dataset_load_report`), reset on each open/close.
+
+**Behavior per case (section F of prior plan, retained):**
+- **Missing manifest:** project opens normally; `manifest_status == "missing"`; `loaded_dataset_ids` empty; no error. Backward compatible.
+- **Corrupted manifest:** project opens (metadata loads); `manifest_status == "corrupted"`; failures recorded; clear error surfaced. Project is **not** silently treated as empty.
+- **Missing individual dataset file:** remaining valid datasets load; missing dataset recorded in `missing_files` / `failures`; project opens.
+- **Corrupted individual dataset file:** isolated — that dataset recorded in `corrupted_files` / `failures`; other valid datasets load; project opens.
+- **Unsupported format version:** recorded in `unsupported_versions` / `failures`; not loaded; other datasets unaffected.
+
+**Caller distinction:**
+- Project with no datasets: `manifest_status == "missing"` and `loaded_dataset_ids == []`.
+- Missing manifest: same as above (manifest file absent).
+- Corrupted manifest: `manifest_status == "corrupted"`, `loaded_dataset_ids` may be empty or partial, `failures` non-empty.
+- Partial load: `loaded_dataset_ids` non-empty AND `failures` non-empty.
+
+Errors are reported through existing application conventions (the service raises/records; the UI layer may display via `QMessageBox.critical` as it does today for save/open failures). No empty arrays are silently substituted for unavailable data.
+
+---
+
+## E. Path validation
+
+**Verified fact:** Internal dataset storage uses project-relative paths (e.g. `datasets/<uuid>.json`). `DatasetSource.original_file_path` is provenance metadata — it records the original FITS location and must **not** be subjected to internal storage-path rules.
+
+**Path validation rules (for internal dataset files and manifest):**
+1. Internal paths are stored and accepted only as **project-relative** paths (no absolute paths).
+2. On write/read, resolve `<project_dir> / relative_path` using `Path.resolve()` (or `os.path.realpath`) to symlink-resolve the full path.
+3. Confirm the resolved path is contained within the resolved `<project_dir> / datasets/` directory (prefix check on resolved paths, not string prefixes). This blocks `..` traversal, symlink escapes, and absolute paths.
+4. Reject duplicate dataset IDs and duplicate manifest entries at load time.
+5. Reject malformed or unsupported storage paths (non-relative, escaping, outside `datasets/`).
+
+**Original source-file paths:** Stored verbatim inside each dataset file as `DatasetSource.original_file_path` provenance. They are never resolved against the project directory and never validated as internal storage paths.
+
+---
+
+## F. Additional tests (transaction-focused)
+
+All non-GUI, using `pytest tmp_path`, synthetic `LightCurveDataset` fixtures, and failure injection via monkeypatching (e.g., monkeypatch `_write_json_atomic`, `os.replace`, or dataset repository write methods to raise) rather than relying on OS permissions.
+
+**Dataset repository transaction tests:**
+- Failure during dataset staging → no final dataset files, no manifest change, `project.json` unchanged, project dirty, datasets not visible on reopen.
+- Failure during manifest preparation → dataset files may be staged/finalized but manifest not replaced, dirty preserved.
+- Failure during project metadata save (inject into `repo.save`) → manifest not replaced, dirty preserved, staged temp files cleaned.
+- Failure during final manifest replacement → dataset files finalized, manifest unchanged (previous authoritative), datasets not visible on reopen, dirty preserved.
+- Previous manifest remains authoritative when coordinated save fails → reopen loads only manifest-referenced datasets.
+- Reopening after a failed save → only committed datasets load; orphan files exist but unreferenced.
+- Discard after a failed save → runtime cleared; on reopen no uncommitted datasets reappear.
+- Retry after a failed save → coordinated save succeeds, datasets committed, project clean.
+- Dirty state correct throughout: dirty before save, dirty after failure, clean after success.
+- No uncommitted dataset association becomes visible after reopen under any failure point.
+
+**Scientific fidelity and load diagnostics tests (retained from prior plan):**
+- NaN / `+Inf` / `-Inf` preservation; finite float64 precision; int64 dtypes; `None` vs empty arrays vs zero arrays; uncertainties; quality flags; cadence numbers; time metadata; source metadata; validation findings; SAP/PDCSAP distinct.
+- Missing manifest → zero datasets, no error.
+- Corrupted manifest → `manifest_status == "corrupted"`, project still opens, clear failure recorded.
+- Missing/corrupted individual dataset → isolated, other datasets load.
+- Unsupported version → not loaded, reported.
+- Duplicate IDs/entries rejected.
+- Invalid paths / path traversal rejected.
+- Atomic writes: interrupted write leaves no corrupted file in place.
+- Orphan detection without deletion.
+
+**ProjectService tests:**
+- `add_dataset` marks dirty; `get_dataset`/`list_datasets` correct; duplicate ID rejected.
+- Save persists datasets; reopen recovers them with all measurements/metadata.
+- Closing clears runtime dataset collection.
+- Project switching does not leak datasets between projects.
+- Failed save leaves project dirty and active; `project.json` unchanged (for metadata) / manifest unchanged (for datasets).
+- Project with no datasets works unchanged.
+- Load report distinguishes missing manifest, corrupted manifest, partial load.
+
+**Regression:** full existing suite (233 tests) plus new tests.
+
+---
+
+## G. Remaining risks and approval decisions
+
+**Residual risks:**
+- Crash between manifest replacement and `mark_clean()`: datasets visible on reopen but dirty flag lost (process restarts clean). Acceptable provisional limitation; documented.
+- Orphan dataset files accumulate after failed saves; no auto-delete (deliberate). Cleanup deferred to a separately designed operation.
+- `project.json` may be updated (metadata changes) even when the dataset commit fails; Discard does not revert `project.json` (consistent with existing behavior). Documented limitation.
+- Non-standard JSON (`NaN`/`Infinity` tokens) remains a documented limitation under deferred D6.
+
+**Decisions requiring explicit user approval (from prior plan, retained):**
+
+1. **Separate manifest + per-dataset files** (not `external_data_references`, not a schema change to v3). Recommended.
+2. **Serialization Option A** (default Python JSON, non-standard NaN/Inf tokens, exact scientific round-trip in Python). Recommended; documented limitation.
+3. **Manifest at fixed relative path `datasets/manifest.json`**, consulted on open, not referenced from `project.json` (no schema change). Recommended.
+4. **No automatic orphan-file deletion.** Recommended.
+5. **Commit point = manifest replacement; project clean only after full coordinated save.** Recommended.
+
+**New approval item introduced by this revision:**
+6. **Add `mark_clean: bool = True` parameter to `ProjectRepository.save()`** so the coordinated save can write `project.json` without prematurely marking clean. Default `True` preserves all existing behavior; coordinated save passes `False`. This is a small internal signature change. Recommended.
+
+No implementation will begin until these are explicitly approved.
 
 # ChatGPT — Plan Review (Version 3)
 
+# SUBTASK 2.2.3 — FINAL DESIGN CHECK
+
+## MODE: PLAN ONLY
+
+The revised save transaction is accepted as the proposed direction. Before implementation approval, resolve three remaining details.
+
+Do not modify files, tests, or documentation. Do not implement anything or commit/push.
+
+### 1. Distinguish missing and empty manifests
+
+The current `DatasetLoadReport` treats both an empty project and a missing manifest as `manifest_status == "missing"`.
+
+Revise this distinction.
+
+At minimum, support:
+- Missing manifest.
+- Valid manifest with zero entries.
+- Valid manifest with one or more entries.
+- Corrupted manifest.
+
+Explain how a project with no datasets differs from a project whose manifest is missing.
+
+Also document the limitation that a deleted manifest cannot be distinguished from a project that never had one unless another source of information establishes that the manifest should exist.
+
+Consider whether newly initialized dataset storage should create a valid empty manifest.
+
+### 2. Verify dataset mutability and avoid untracked persistence
+
+Inspect `LightCurveDataset` and its nested model classes.
+
+Determine whether:
+- The dataset object itself is immutable.
+- Its NumPy arrays can be modified after construction.
+- Its metadata fields can be modified after construction.
+- A caller can change measurement values without triggering `ProjectMetadata.mark_dirty()`.
+
+The previous plan proposes rewriting every dataset file during each project save. Evaluate whether that could persist untracked in-memory modifications.
+
+For this subtask, prefer a minimal policy:
+- Dataset addition is supported.
+- Dataset editing and replacement remain out of scope.
+- Existing committed dataset files should not be rewritten unnecessarily.
+
+Recommend the smallest safe implementation consistent with the actual model.
+
+Do not introduce broad immutability changes or dataset-level dirty tracking without explaining why they are necessary.
+
+### 3. Simplify load diagnostics
+
+Revise `DatasetLoadReport` so it can represent both manifest-level and dataset-level failures without requiring every failure to have a dataset ID.
+
+Avoid redundant fields that duplicate the same failure information.
+
+Keep the existing `open_project()` return type unchanged. The report should remain queryable from `ProjectService`.
+
+Show example report states for:
+- Missing manifest.
+- Valid empty manifest.
+- Successful load.
+- Corrupted manifest.
+- Partial load with one valid and one corrupted dataset.
+
+### 4. Required output
+
+Return only:
+A. Manifest-state distinctions.
+B. Verified dataset mutability findings.
+C. Recommended persistence behavior for existing versus newly added datasets.
+D. Revised load-report structure and examples.
+E. Any remaining risks.
+
+Do not begin implementation. Wait for explicit user approval.
+
+---
+
+# Planning Version [4]
+
+### ChatGPT — OpenCode Revision Prompt
+
+## SUBTASK 2.2.3 — FINAL DESIGN CHECK
+
+## MODE: PLAN ONLY
+
+The revised save transaction is accepted as the proposed direction. Before implementation approval, resolve three remaining details.
+
+Do not modify files, tests, or documentation. Do not implement anything or commit/push.
+
+### 1. Distinguish missing and empty manifests
+
+The current `DatasetLoadReport` treats both an empty project and a missing manifest as `manifest_status == "missing"`.
+
+Revise this distinction.
+
+At minimum, support:
+- Missing manifest.
+- Valid manifest with zero entries.
+- Valid manifest with one or more entries.
+- Corrupted manifest.
+
+Explain how a project with no datasets differs from a project whose manifest is missing.
+
+Also document the limitation that a deleted manifest cannot be distinguished from a project that never had one unless another source of information establishes that the manifest should exist.
+
+Consider whether newly initialized dataset storage should create a valid empty manifest.
+
+### 2. Verify dataset mutability and avoid untracked persistence
+
+Inspect `LightCurveDataset` and its nested model classes.
+
+Determine whether:
+- The dataset object itself is immutable.
+- Its NumPy arrays can be modified after construction.
+- Its metadata fields can be modified after construction.
+- A caller can change measurement values without triggering `ProjectMetadata.mark_dirty()`.
+
+The previous plan proposes rewriting every dataset file during each project save. Evaluate whether that could persist untracked in-memory modifications.
+
+For this subtask, prefer a minimal policy:
+- Dataset addition is supported.
+- Dataset editing and replacement remain out of scope.
+- Existing committed dataset files should not be rewritten unnecessarily.
+
+Recommend the smallest safe implementation consistent with the actual model.
+
+Do not introduce broad immutability changes or dataset-level dirty tracking without explaining why they are necessary.
+
+### 3. Simplify load diagnostics
+
+Revise `DatasetLoadReport` so it can represent both manifest-level and dataset-level failures without requiring every failure to have a dataset ID.
+
+Avoid redundant fields that duplicate the same failure information.
+
+Keep the existing `open_project()` return type unchanged. The report should remain queryable from `ProjectService`.
+
+Show example report states for:
+- Missing manifest.
+- Valid empty manifest.
+- Successful load.
+- Corrupted manifest.
+- Partial load with one valid and one corrupted dataset.
+
+### 4. Required output
+
+Return only:
+A. Manifest-state distinctions.
+B. Verified dataset mutability findings.
+C. Recommended persistence behavior for existing versus newly added datasets.
+D. Revised load-report structure and examples.
+E. Any remaining risks.
+
+Do not begin implementation. Wait for explicit user approval.
+
+### OpenCode — Revised Plan (Version 4)
+
+## A. Manifest-state distinctions
+
+The `DatasetLoadReport` must distinguish four manifest states:
+
+| Manifest state | Meaning | `manifest_status` | File exists? | `loaded_dataset_ids` | `failures` |
+|---|---|---|---|---|---|
+| Missing manifest | No `manifest.json` in `datasets/` | `"missing"` | No | `[]` | `[]` (normal, not an error) |
+| Valid empty manifest | Manifest present, valid, zero entries | `"empty"` | Yes | `[]` | `[]` |
+| Valid manifest with entries | Manifest present, valid, one or more entries | `"loaded"` | Yes | `["id1", ...]` | `[]` (or partial-failure entries) |
+| Corrupted manifest | File present but invalid JSON or invalid structure | `"corrupted"` | Yes | `[]` or partial | Non-empty, manifest-level failure |
+
+**How a project with no datasets differs from one whose manifest is missing:** A project with a valid empty manifest has explicitly undergone dataset-storage initialization (it has a `datasets/` directory with `manifest.json` containing `[]`). A project with a missing manifest simply never had dataset storage created — the normal state for projects created before 2.2.3. Both load zero datasets, but they are distinguishable via `manifest_status` ("empty" vs "missing"), which matters for diagnostics and for deciding whether to create dataset storage on first save.
+
+**Documented limitation:** A deleted manifest cannot be distinguished from a project that never had one unless another source of information (e.g., a project-level flag or the prior existence of `datasets/`) establishes that the manifest should exist. This subtask does not introduce such a source; both cases resolve to zero loaded datasets.
+
+**Should newly initialized dataset storage create a valid empty manifest?** Yes — the first time a dataset is added to a project that has no manifest, the coordinated save should create `datasets/` and write an initial valid empty manifest (entries `[]`), then add the new dataset's entry and replace the manifest atomically. This establishes a consistent, readable state and makes the "missing vs empty" distinction observable going forward.
+
+---
+
+## B. Verified dataset mutability findings
+
+Confirmed by source inspection of `src/light_curve.py`:
+
+- **`LightCurveDataset` is mutable.** It is a dataclass without `frozen=True`. Fields can be reassigned after construction: `dataset.name = ...`, `dataset.notes = ...`, `dataset.source.original_file_path = ...`, `dataset.imported_at = ...`, `dataset.measurements = ...`, etc.
+- **NumPy arrays can be modified after construction.** `__post_init__` copies incoming arrays at construction time (protecting the model from the *caller's* original objects), but after construction the arrays are live references. A caller can mutate them in place: `dataset.time.values[0] = 999.0`, `dataset.measurements.series["SAP_FLUX"].values[:] = ...`, `dataset.quality_flags[0] = 64`. NumPy arrays are mutable objects; the dataclass does not make them read-only.
+- **Metadata fields can be modified after construction.** All scalar fields (`name`, `notes`, `imported_at`, and all `DatasetSource`/`TimeInfo`/`MeasurementColumn` fields) are plain dataclass fields with setters.
+- **In-memory modifications do NOT trigger `ProjectMetadata.mark_dirty()`.** The service's `add_dataset()` would mark the project dirty on *addition*, but there is no dataset-level dirty tracking, and mutating a retrieved dataset's arrays or fields in memory does not propagate to project dirty state.
+
+**Implication for the save plan:** If the save routine blindly rewrites *every* dataset file in the runtime collection on each project save, it would persist untracked in-memory modifications to datasets that were already committed — and the project might not even be dirty. This must be avoided.
+
+---
+
+## C. Recommended persistence behavior: existing vs newly added datasets
+
+**Minimal safe policy (recommended):**
+
+| Scenario | Behavior on project save |
+|---|---|
+| Dataset already committed (its `dataset_id` is in the manifest and its file exists on disk) | **Do not rewrite.** Leave its file untouched. It is already durably stored. |
+| Newly added dataset (in runtime collection, `dataset_id` not in manifest) | Serialize and stage its file; add a manifest entry; replace manifest atomically. |
+| Dataset removed from runtime collection | Out of scope for 2.2.3 (deletion deferred). |
+
+**Why this is the smallest safe approach:**
+- It avoids rewriting existing committed dataset files, so untracked in-memory modifications to committed datasets are never silently persisted.
+- It only pays the persistence cost for genuinely new dataset additions.
+- It requires no immutability changes to `LightCurveDataset` and no dataset-level dirty tracking.
+- It preserves the invariant that the manifest never references a file that doesn't exist (dataset files are finalized before manifest replacement).
+
+**Save sequence adjustment:** During coordinated save, compare the runtime collection's `dataset_id`s against the manifest's entries. Only datasets whose IDs are absent from the manifest are staged and written. The new manifest = existing manifest entries + new entries for added datasets. This also means a project whose runtime collection exactly matches the manifest (no new additions) performs zero dataset-file writes on save — only `project.json` and (possibly) no manifest change.
+
+---
+
+## D. Revised load-report structure and examples
+
+**Revised structure** (retains existing `open_project()` return type of `ProjectMetadata`; report queryable from `ProjectService`):
+
+```python
+@dataclass
+class DatasetLoadFailure:
+    dataset_id: str | None   # None for manifest-level failures
+    reason: str
+
+@dataclass
+class DatasetLoadReport:
+    manifest_status: str   # "missing" | "empty" | "loaded" | "corrupted"
+    loaded_dataset_ids: list[str]
+    failures: list[DatasetLoadFailure]
+```
+
+Accessed via a `ProjectService` property (e.g. `last_dataset_load_report`), reset on each open/close. `failures` carries manifest-level failures (dataset_id `None`) and dataset-level failures (dataset_id set). No redundant fields duplicating the same information.
+
+**Example report states:**
+
+1. **Missing manifest** (project created before 2.2.3):
+   - `manifest_status == "missing"`
+   - `loaded_dataset_ids == []`
+   - `failures == []`
+   - Project opens normally; zero datasets.
+
+2. **Valid empty manifest** (dataset storage initialized, no datasets):
+   - `manifest_status == "empty"`
+   - `loaded_dataset_ids == []`
+   - `failures == []`
+   - Project opens normally; zero datasets.
+
+3. **Successful load** (two valid datasets):
+   - `manifest_status == "loaded"`
+   - `loaded_dataset_ids == ["uuid-a", "uuid-b"]`
+   - `failures == []`
+
+4. **Corrupted manifest** (malformed JSON or invalid structure):
+   - `manifest_status == "corrupted"`
+   - `loaded_dataset_ids == []`
+   - `failures == [DatasetLoadFailure(dataset_id=None, reason="manifest corrupted: ...")]`
+   - Project opens (metadata loads); failure clearly reported; not silently treated as empty.
+
+5. **Partial load** (one valid dataset, one corrupted dataset file):
+   - `manifest_status == "loaded"`
+   - `loaded_dataset_ids == ["uuid-a"]`
+   - `failures == [DatasetLoadFailure(dataset_id="uuid-b", reason="dataset file corrupted: ...")]`
+   - Project opens with the one valid dataset; the corrupted one is isolated and reported.
+
+**Caller distinction:** A caller checks `manifest_status` and whether `failures` is non-empty. `"missing"` vs `"empty"` tells whether storage was ever initialized; `"loaded"` vs `"corrupted"` tells whether the manifest was readable; `failures` enumerates any dataset-level problems with their IDs (or `None` for manifest-level).
+
+---
+
+## E. Remaining risks
+
+- **Untracked in-memory mutation of committed datasets:** Mitigated by not rewriting committed dataset files on save (Section C). However, if a caller mutates a *newly added but not-yet-saved* dataset in memory after `add_dataset()` but before `save_project()`, those mutations will be persisted on save — expected, since the dataset was never committed.
+- **Crash between manifest replacement and `mark_clean()`:** Datasets visible on reopen but dirty flag lost (process restarts clean). Documented provisional limitation.
+- **Orphan dataset files:** May accumulate after failed saves (staged/finalized files never referenced by a replaced manifest). Deliberately preserved, not auto-deleted; cleanup deferred.
+- **`project.json` may be updated (metadata changes) even when the dataset commit fails; Discard does not revert `project.json`:** Consistent with existing behavior; documented.
+- **Non-standard JSON (`NaN`/`Infinity` tokens):** Documented limitation under deferred D6; exact scientific round-trip within Python.
+
+No implementation will begin until these design points are explicitly approved.
+
+## ChatGPT — Plan Review (Version 4)
+ Review of the revised plan
+
+The three requested clarifications are satisfactory.
+
+I also checked the uploaded 2.2.2 snapshot. The mutability findings are supported by `src/light_curve.py`:
+
+- The dataclasses are not frozen.
+- Array copying occurs during construction, but arrays remain mutable afterward.
+- Nested metadata and dataset fields can be reassigned.
+- There is no mechanism connecting those changes to `ProjectMetadata.mark_dirty()`.
+
+The proposed policy of writing only datasets absent from the manifest is therefore the appropriate minimal solution. It avoids silently persisting changes to previously committed datasets without expanding 2.2.3 into a dataset-editing or dirty-tracking task.
+
+Two edge cases still need explicit rules.
+
+1\. An ID exists in the manifest, but its dataset failed to load. If `add_dataset()` accepts a new object with that same ID, the save routine might skip it because the ID is already in the manifest. The safest 2.2.3 behavior is to reject that addition as a conflict. Repairing or replacing missing/corrupted datasets can remain deferred.
+
+2\. First-time manifest creation. Writing an empty manifest and then immediately replacing it with a populated manifest introduces an unnecessary intermediate commit. I recommend staging the new dataset and atomically writing the populated manifest once. A valid empty manifest should represent an explicitly initialized dataset store with no datasets, rather than an intermediate step in adding the first dataset.
+
+One additional boundary: a corrupted manifest should not be silently replaced during a save. The service should report the problem and refuse dataset persistence until the manifest can be handled safely.
+
+Final targeted PLAN clarification
+
+Have OpenCode confirm these behaviors against the existing repository and revised design. This should be the last planning pass if the answers are satisfactory.
+
+ Final 2.2.3 PLAN clarification — manifest conflicts and first-save behavior
+
+Remain in PLAN mode. Do not implement or modify files.
+
+The revised design addresses the previous review. I need confirmation of three remaining edge cases before approving the implementation plan.
+
+### 1. Dataset IDs already present in the manifest
+
+Consider this scenario:
+
+- A manifest contains dataset ID `X`.
+- Its referenced dataset file is missing, corrupted, or unsupported.
+- The dataset therefore does not appear in the successfully loaded runtime collection.
+- A caller attempts to add a dataset whose `dataset_id` is also `X`.
+
+Confirm the proposed behavior.
+
+**Recommended behavior:** `add_dataset()` rejects the addition because the ID is already reserved by the manifest. It must not silently accept the object and later skip writing it because the ID appears to be committed.
+
+Dataset repair, replacement, and deletion remain outside 2.2.3.
+
+Explain how the service will distinguish:
+
+- An ID already present in the runtime collection.
+- An ID present in the manifest but not successfully loaded.
+- A genuinely new ID.
+
+### 2. First-time manifest creation
+
+The current proposal describes writing an initial empty manifest and then adding the first dataset entry.
+
+Evaluate whether this requires two separate manifest writes.
+
+**Recommended behavior:** For the first dataset addition:
+
+1. Stage the dataset file.
+2. Finalize the dataset file at its internal path.
+3. Construct the populated manifest.
+4. Atomically replace/create `manifest.json` with that populated manifest.
+5. Mark the project clean only after the coordinated save succeeds.
+
+The first populated manifest is the dataset-visibility commit point. There is no need to write an intermediate empty manifest.
+
+A valid empty manifest remains a supported state for an explicitly initialized dataset store containing zero datasets. Confirm whether this can be supported without adding an unnecessary initialization workflow to 2.2.3.
+
+Explain the failure behavior if staging or manifest replacement fails during the first dataset addition.
+
+### 3. Corrupted manifest behavior during saving
+
+Consider a project that opens successfully but has `manifest_status == "corrupted"`.
+
+Confirm that:
+
+- The corrupted manifest is not silently treated as an empty manifest.
+- A save does not overwrite it with a newly constructed manifest.
+- Dataset persistence is refused with a clear, actionable error.
+- The existing manifest and dataset files remain untouched.
+- The project metadata save behavior is explicitly defined for this situation.
+
+Recommend the safest behavior consistent with the coordinated-save design.
+
+Response format
+
+Return only:
+
+A. Findings from existing code and the current design\
+B. Recommended behavior for each of the three cases\
+C. Any remaining risks or unresolved decisions\
+D. Exact proposed changes to the 2.2.3 implementation plan
+
+Do not implement anything, edit documentation, run tests, commit, or push.
+
+This is the final planning clarification. Do not broaden the scope into dataset editing, replacement, deletion, GUI import, permanent storage architecture, or unrelated cleanup.
+
+Once you provide that report, I can review the final design and give you a precise approval checklist and bounded BUILD prompt. No implementation has been approved yet.
+
+---
+
+--- 
+
+---
+# Planning Version [5]
+
+### ChatGPT — OpenCode Revision Prompt
+
+# Final 2.2.3 PLAN clarification — manifest conflicts and first-save behavior
+
+Remain in PLAN mode. Do not implement or modify files.
+
+The revised design addresses the previous review. I need confirmation of three remaining edge cases before approving the implementation plan.
+
+## 1. Dataset IDs already present in the manifest
+
+Consider this scenario:
+
+- A manifest contains dataset ID `X`.
+- Its referenced dataset file is missing, corrupted, or unsupported.
+- The dataset therefore does not appear in the successfully loaded runtime collection.
+- A caller attempts to add a dataset whose `dataset_id` is also `X`.
+
+Confirm the proposed behavior.
+
+**Recommended behavior:** `add_dataset()` rejects the addition because the ID is already reserved by the manifest. It must not silently accept the object and later skip writing it because the ID appears to be committed.
+
+Dataset repair, replacement, and deletion remain outside 2.2.3.
+
+Explain how the service will distinguish:
+- An ID already present in the runtime collection.
+- An ID present in the manifest but not successfully loaded.
+- A genuinely new ID.
+
+## 2. First-time manifest creation
+
+The current proposal describes writing an initial empty manifest and then adding the first dataset entry.
+
+Evaluate whether this requires two separate manifest writes.
+
+**Recommended behavior:** For the first dataset addition:
+1. Stage the dataset file.
+2. Finalize the dataset file at its internal path.
+3. Construct the populated manifest.
+4. Atomically replace/create `manifest.json` with that populated manifest.
+5. Mark the project clean only after the coordinated save succeeds.
+
+The first populated manifest is the dataset-visibility commit point. There is no need to write an intermediate empty manifest.
+
+A valid empty manifest remains a supported state for an explicitly initialized dataset store containing zero datasets. Confirm whether this can be supported without adding an unnecessary initialization workflow to 2.2.3.
+
+Explain the failure behavior if staging or manifest replacement fails during the first dataset addition.
+
+## 3. Corrupted manifest behavior during saving
+
+Consider a project that opens successfully but has `manifest_status == "corrupted"`.
+
+Confirm that:
+- The corrupted manifest is not silently treated as an empty manifest.
+- A save does not overwrite it with a newly constructed manifest.
+- Dataset persistence is refused with a clear, actionable error.
+- The existing manifest and dataset files remain untouched.
+- The project metadata save behavior is explicitly defined for this situation.
+
+Recommend the safest behavior consistent with the coordinated-save design.
+
+## Response format
+
+Return only:
+
+A. Findings from existing code and the current design  
+B. Recommended behavior for each of the three cases  
+C. Any remaining risks or unresolved decisions  
+D. Exact proposed changes to the 2.2.3 implementation plan
+
+Do not implement anything, edit documentation, run tests, commit, or push.
+
+This is the final planning clarification. Do not broaden the scope into dataset editing, replacement, deletion, GUI import, permanent storage architecture, or unrelated cleanup.
+
+# OpenCode — Revised Plan (Version 5)
+
+[## A. Findings from existing code and current design
+
+**Verified facts:**
+- `ProjectService` currently has no dataset awareness: no `add_dataset`, no runtime dataset collection, no manifest handling (confirmed in `src/project_service.py`).
+- `ProjectRepository.save(metadata)` writes `project.json` atomically then calls `metadata.mark_clean()`; there is no way to save `project.json` without marking clean unless a `mark_clean` parameter is added (confirmed in `src/project_repository.py` lines 59–73).
+- `LightCurveDataset` is a mutable dataclass; arrays and fields can be modified after construction without triggering `ProjectMetadata.mark_dirty()` (confirmed in `src/light_curve.py`).
+- `add_dataset()` would need to reject duplicate IDs. The revised design keeps manifest entries as the authoritative project-level index of dataset IDs, independent of whether each dataset file loaded successfully.
+
+---
+
+## B. Recommended behavior for each case
+
+### Case 1 — Dataset ID already present in the manifest
+
+**Behavior:** `add_dataset()` rejects the addition when `dataset_id` is already reserved by the manifest, even if that dataset's file failed to load and is absent from the runtime collection.
+
+**How the service distinguishes the three ID states:**
+
+| ID state | Check | Outcome |
+|---|---|---|
+| Already in runtime collection | `dataset_id in runtime_collection` | Reject — dataset already active in memory for this project. |
+| Present in manifest but not loaded | `dataset_id in manifest_entries` AND not in runtime collection | Reject — ID is reserved/committed on disk; load failure (missing/corrupted/unsupported) does not free the ID. |
+| Genuinely new ID | Not in runtime collection AND not in manifest_entries | Accept — proceed to stage and save. |
+
+**Rationale:** The manifest is the authoritative index of which datasets belong to the project. If ID `X` is in the manifest, it refers to a committed dataset slot. A failed load (missing/corrupted/unsupported file) does not vacate that slot. Allowing a new dataset with ID `X` would create ambiguity between the manifest entry and the new object. Dataset repair, replacement, and deletion remain out of scope for 2.2.3.
+
+**Implementation note:** The service must retain the manifest's dataset IDs (including those whose files failed to load) after opening, so `add_dataset()` can validate against them. The `DatasetLoadReport` records load failures, but the manifest ID set is separate and remains available for uniqueness checks.
+
+---
+
+### Case 2 — First-time manifest creation
+
+**Behavior:** A single manifest write with the populated manifest. No intermediate empty manifest is written.
+
+**First dataset addition sequence:**
+1. Stage the dataset file to a temp path in `datasets/`.
+2. Finalize it at `datasets/<dataset_id>.json` via atomic `os.replace`.
+3. Construct the populated manifest containing the single entry for the new dataset.
+4. Atomically create/replace `manifest.json` with the populated manifest — **this is the dataset-visibility commit point.**
+5. Mark the project clean only after the coordinated save succeeds.
+
+**Can a valid empty manifest be supported without an initialization workflow?** Yes. A valid empty manifest (entries `[]`) is a supported load-state (`manifest_status == "empty"`) for diagnostics and backward compatibility. However, 2.2.3 does **not** need a separate "initialize dataset storage" operation, and it does **not** create an empty manifest on its own. The manifest is created populated on the first dataset addition. An empty manifest could only arise from external creation or a future operation; the loader handles it gracefully. No initialization workflow is added to 2.2.3.
+
+**Failure behavior during first dataset addition:**
+- **Staging fails:** No dataset file, no manifest created; project stays dirty; staged temp cleaned up (or preserved as orphan); error surfaced.
+- **Finalization (`os.replace`) fails:** No manifest created; any finalized dataset file is an unreferenced orphan (preserved, not loaded, not auto-deleted); project stays dirty; error surfaced.
+- **Manifest replacement fails:** Dataset file exists on disk but manifest is absent → dataset is an unreferenced orphan, not visible on reopen; project stays dirty; error surfaced.
+- **Crash after manifest replacement but before `mark_clean()`:** Manifest is committed (dataset visible on reopen) but dirty flag is lost on restart. Documented provisional limitation.
+
+---
+
+### Case 3 — Corrupted manifest behavior during saving
+
+**Behavior when `manifest_status == "corrupted"`:**
+
+| Requirement | Behavior |
+|---|---|
+| Corrupted manifest not silently treated as empty | ✅ Load report records `manifest_status == "corrupted"`; project opens but failure is explicit. |
+| Save does not overwrite it with a newly constructed manifest | ✅ Save refuses; no manifest write occurs. |
+| Dataset persistence refused with clear, actionable error | ✅ `save_project()` raises an error stating the manifest is corrupted and dataset persistence cannot proceed. |
+| Existing manifest and dataset files remain untouched | ✅ No files are modified, created, or deleted. |
+| Project metadata save behavior defined | ✅ The entire save is refused (project stays dirty, no files touched). Project metadata changes also cannot be saved through this state. |
+
+**Recommended safest behavior:** When `manifest_status == "corrupted"`, `save_project()` raises a `ProjectRepositoryError` (or a dataset-specific error) before any writes: the manifest is corrupted, dataset persistence cannot proceed, and no files are modified. The project remains dirty and active. The user receives a clear, actionable error.
+
+**Rationale:** A corrupted manifest cannot be trusted as a baseline to merge new entries into, and overwriting it risks data loss. Since the coordinated save ties dataset visibility to manifest replacement, and there is no dataset-repair workflow in 2.2.3, the consistent and conservative choice is to block the save entirely rather than save project metadata in an inconsistent state. This is a documented limitation: resolving a corrupted manifest is out of scope for 2.2.3 repair.
+
+---
+
+## C. Remaining risks and unresolved decisions
+
+| Risk | Status |
+|---|---|
+| Crash between manifest replacement and `mark_clean()` | Datasets visible on reopen but dirty flag lost on restart. Documented provisional limitation. |
+| Orphan dataset files after failed saves | Preserved, not auto-deleted; cleanup deferred to a separate operation. |
+| `add_dataset()` ID reservation requires retaining failed-load manifest IDs | Service must keep manifest ID set separate from runtime collection; minor additional state. |
+| Corrupted manifest blocks all saves, including metadata-only | Documented limitation; repair is out of scope for 2.2.3. |
+| Non-standard JSON (`NaN`/`Infinity` tokens) | Documented limitation under deferred D6; exact scientific round-trip within Python. |
+
+**Unresolved decisions (require user approval):** None new beyond the five already identified in the previous plan (separate manifest design, Option A serialization, fixed manifest path, no orphan deletion, manifest-as-commit-point + `mark_clean=False` parameter). This clarification confirms behavior within those approved directions; no new architectural decisions are introduced.
+
+---
+
+## D. Exact proposed changes to the 2.2.3 implementation plan
+
+1. **`add_dataset()` ID validation:** Reject a `dataset_id` if it is present in either the runtime collection **or** the manifest's entry set (including IDs whose files failed to load). Distinguish the three ID states as tabulated above.
+
+2. **First dataset addition — single manifest write:** Remove any notion of writing an intermediate empty manifest. The manifest is created populated with the first dataset's entry via a single atomic `manifest.json` replacement, which is the dataset-visibility commit point. A valid empty manifest remains a supported load-state but is not created by any 2.2.3 operation; no dataset-storage initialization workflow is added.
+
+3. **Corrupted manifest during save:** `save_project()` refuses the entire save when `manifest_status == "corrupted"`, raises a clear actionable error, leaves all files untouched, and preserves the dirty state and active project.
+
+4. **Service state:** After project open, retain the manifest's dataset IDs (including failed-to-load IDs) separately from the successfully loaded runtime collection, to support ID-uniqueness enforcement in `add_dataset()`.
+
+No changes to `LightCurveDataset`, `fits_importer.py`, `project_model.py`, `main_window.py`, or Foundation documents. No GUI import workflow, dataset editing/replacement/deletion, orphan cleanup, or permanent storage architecture is introduced.
+
+# ChatGPT — Plan Review (Version 5)
+
 [Paste complete ChatGPT review.]
 
 ---
 
 # Planning Version [N]
 
-# ChatGPT — OpenCode Revision Prompt
+## ChatGPT — OpenCode Revision Prompt
 
 [Paste complete ChatGPT prompt.]
 
-# OpenCode — Revised Plan (Version N)
+## OpenCode — Revised Plan (Version N)
 
 [Paste complete OpenCode response.]
 
-# ChatGPT — Plan Review (Version N)
-
-[Paste complete ChatGPT review.]
-
----
-
-# Planning Version [N]
-
-# ChatGPT — OpenCode Revision Prompt
-
-[Paste complete ChatGPT prompt.]
-
-# OpenCode — Revised Plan (Version N)
-
-[Paste complete OpenCode response.]
-
-# ChatGPT — Plan Review (Version N)
-
-[Paste complete ChatGPT review.]
-
----
-
-# Planning Version [N]
-
-# ChatGPT — OpenCode Revision Prompt
-
-[Paste complete ChatGPT prompt.]
-
-# OpenCode — Revised Plan (Version N)
-
-[Paste complete OpenCode response.]
-
-# ChatGPT — Plan Review (Version N)
+## ChatGPT — Plan Review (Version N)
 
 [Paste complete ChatGPT review.]
 
@@ -3123,17 +3847,17 @@ Do not begin implementation. Wait for explicit user authorization.
 
 # 3. Build Phase
 
-# Build 1
+## Build 1
 
-# ChatGPT — OpenCode Build Prompt
+### ChatGPT — OpenCode Build Prompt
 
 [Paste complete ChatGPT prompt.]
 
-# OpenCode — Build Response (Build 1)
+### OpenCode — Build Response (Build 1)
 
 [Paste complete OpenCode response.]
 
-# ChatGPT — Build Review (Build 1)
+### ChatGPT — Build Review (Build 1)
 
 [Paste complete ChatGPT review.]
 
@@ -3141,15 +3865,15 @@ Do not begin implementation. Wait for explicit user authorization.
 
 # Build [N]
 
-# ChatGPT — OpenCode Build Prompt
+## ChatGPT — OpenCode Build Prompt
 
 [Paste complete ChatGPT prompt.]
 
-# OpenCode — Build Response (Build N)
+## OpenCode — Build Response (Build N)
 
 [Paste complete OpenCode response.]
 
-# ChatGPT — Build Review (Build N)
+## ChatGPT — Build Review (Build N)
 
 [Paste complete ChatGPT review.]
 
@@ -3157,13 +3881,13 @@ Do not begin implementation. Wait for explicit user authorization.
 
 # 4. Additional Discussions
 
-# Discussion 1
+## Discussion 1
 
-# ChatGPT
+## ChatGPT
 
 [Paste complete message.]
 
-# OpenCode
+## OpenCode
 
 [Paste complete response, if applicable.]
 
@@ -3171,11 +3895,11 @@ Do not begin implementation. Wait for explicit user authorization.
 
 # Discussion [N]
 
-# ChatGPT
+## ChatGPT
 
 [Paste complete message.]
 
-# OpenCode
+## OpenCode
 
 [Paste complete response, if applicable.]
 
@@ -3183,7 +3907,7 @@ Do not begin implementation. Wait for explicit user authorization.
 
 # 5. Final Review
 
-# ChatGPT — Final Task Review
+## ChatGPT — Final Task Review
 
 [Paste complete final review.]
 
