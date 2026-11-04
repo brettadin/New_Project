@@ -1,28 +1,66 @@
+# *REVISED* PLAN MODE PROMPT
+
+The existing PLAN prompt has a good foundation. I would revise and tighten it rather than replace its overall structure.
+
+I found several things that need correcting before sending it to OpenCode.
+
+## What needs to change
+
+| Area                    | Required adjustment                                                                                                  |
+| ----------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| Test baseline           | The prompt references 135 passing tests. The latest reported result is now 176 passing tests.                        |
+| Repository instructions | Add `docs/README.md` and explicitly require checking the current roadmap, development log, and unresolved questions. |
+| D4 implementation       | Account for the completed schema version 2 and permission-aware project metadata.                                    |
+| D6 storage decision     | Explicitly preserve the deferred permanent storage decision and provisional local-file direction.                    |
+| FITS inspection         | Distinguish read-only inspection of the actual FITS file from implementing a reusable FITS importer.                 |
+| Data model              | Require a concrete proposed model, including field types, ownership, relationships, and validation responsibilities. |
+| Scientific integrity    | Give more attention to time conventions, units, uncertainties, quality flags, and preserving original measurements.  |
+| Subtask boundaries      | Make sure 2.2.1 does not absorb implementation work assigned to 2.2.2 or 2.2.3.                                      |
+
+There is also an important distinction in the existing documents:
+
+- 2.2.1 must inspect the actual FITS file to understand what the data model needs to represent.
+- 2.2.2 implements the reusable FITS-reading and extraction functionality.
+
+Those are different responsibilities. The revised prompt will make that explicit.
+
+## Revised PLAN prompt
+
+The following replaces only the PLAN section at the top of `PROMPTING.md`.
+
+The existing BUILD section remains untouched. We will revisit it after reviewing OpenCode's findings and approving the design.
+
 # PLAN MODE PROMPT
 
 # Subtask 2.2.1 — FITS Inspection and Data-Model Design
 
 ## Mode: PLAN ONLY
 
-Inspect the existing project, examine the selected astronomical FITS dataset, and develop a proposed data-model and import-design approach.
+Inspect the actual repository, examine the selected astronomical FITS dataset, and develop a technically and scientifically justified design for the application's internal light-curve data model.
 
 **Do not implement anything. Do not modify, create, delete, or overwrite files.**
 
-This task is limited to understanding the FITS data structure and determining how the application should represent an imported light-curve dataset. Import implementation, project integration, and persistence implementation belong to later subtasks.
+This task establishes the scientific data representation that will support the remaining Subtask 2.2 work.
+
+The objective is to determine what the application needs to represent, how that representation should fit into the existing architecture, and what implementation should be authorized in the subsequent BUILD task.
+
+FITS import implementation, project integration, and scientific dataset persistence belong to later subtasks.
 
 ---
 
 ## 1. Project Context
 
-Repository:
+**Repository:**
 
 `C:\Code\New_Project`
 
-GitHub:
+**GitHub:**
 
-https://github.com/brettadin/New_Project
+`https://github.com/brettadin/New_Project`
 
-The application is a local desktop astronomy research application built with:
+The application is a local desktop astronomy research application.
+
+The approved technology stack is documented in `DEC-006` and includes:
 
 - Python 3.13
 - PySide6
@@ -32,20 +70,51 @@ The application is a local desktop astronomy research application built with:
 - Matplotlib (QtAgg)
 - pytest
 
-The project currently has working project lifecycle functionality:
+Verify the actual environment and current implementation rather than assuming every listed dependency or capability is already present.
 
-- Create projects.
-- Discover and open projects.
-- Save and close projects.
-- Track unsaved changes.
-- Manage project statuses.
-- Persist project metadata.
+### 1.1 Existing application functionality
 
-The current full test-suite baseline is 135 passing tests, as reported in the latest development log. Verify the current repository state rather than assuming this count is still current.
+The application has completed Stage 2, Task 2.1, covering:
 
-The next development objective is Stage 2.2 — Light-Curve Import.
+- Project creation.
+- Project discovery and opening.
+- Project saving and closing.
+- Unsaved-change tracking.
+- Project lifecycle statuses.
+- Project metadata persistence.
+- Permission-aware project metadata under DEC-003.
 
-The overall objective is to import a real astronomical light curve into a project, preserve its scientific context, and make it available for subsequent visualization and analysis.
+The D4 / DEC-003 implementation is complete.
+
+The project metadata schema is now version 2 and includes:
+
+- `owner`
+- `roles`
+- Existing project metadata and lifecycle information.
+
+The latest reported full test-suite result is:
+
+**176 passed, 0 failed.**
+
+Environment reported:
+
+- Python 3.13.9
+- pytest 9.2.0
+- Existing project `.venv`
+
+These are the latest reported results, not a substitute for inspecting the actual current repository.
+
+The working tree may contain uncommitted D4 changes. Preserve all existing modifications. Do not reset, revert, stash, overwrite, or discard them.
+
+### 1.2 Current development objective
+
+The next objective is:
+
+**Stage 2.2 — Light-Curve Dataset Import**
+
+The overall objective is to establish a workflow that can import real astronomical light-curve observations, preserve their scientific context and provenance, and make them available for subsequent visualization and analysis.
+
+Subtask 2.2.1 establishes the data-model foundation for that workflow.
 
 ---
 
@@ -53,34 +122,106 @@ The overall objective is to import a real astronomical light curve into a projec
 
 Before beginning the investigation:
 
+### 2.1 Project instructions
+
 1. Read the root `AGENTS.md` completely.
-2. Follow all applicable project governance and approval requirements.
-3. Read the relevant sections of:
-   - `docs/MASTER_DEVELOPMENT_ROADMAP.md`
-   - `docs/development/DEVELOPMENT_LOG.md`
-   - Relevant architecture and module documentation.
-   - Relevant data-model documentation.
-   - Relevant decision records.
-   - Relevant scientific review documents.
-4. Review the existing project lifecycle implementation, especially:
-   - `src/project_model.py`
-   - `src/project_repository.py`
-   - `src/project_service.py`
-   - Any existing data-reference or project-association functionality.
-5. Review existing tests to understand established conventions and architectural expectations.
-6. Inspect the Foundation requirements relevant to:
-   - Scientific data formats and metadata.
-   - Original-data preservation.
-   - Data lineage and provenance.
-   - Scientific integrity.
-   - Uncertainty and validation.
-   - Reproducibility.
-   - Local storage and data ownership.
-   - Project and workspace separation.
+2. Read `docs/README.md`.
+3. Read `docs/MASTER_DEVELOPMENT_ROADMAP.md`.
+4. Read `docs/development/DEVELOPMENT_LOG.md`.
+5. Read `docs/development/UNRESOLVED_QUESTIONS.md`.
+6. Inspect relevant decision records in `docs/development/decisions/`.
+7. Read the complete parent document:
 
-Foundation documents are authoritative and read-only. Do not modify them or reinterpret their requirements to fit a proposed implementation.
+   `subtask-2.2-light-curve-import OVERVIEW.md`
+8. Read the complete task overview:
 
-Do not assume that every document listed above exists. Identify actual files and report missing or incomplete documentation where relevant.
+   `task 2.2.1 FITS inspection and data-model design OVERVIEW.md`
+9. Inspect the existing planning and BUILD prompts for consistency with the approved task boundaries.
+
+Follow the repository's actual instructions and approval requirements.
+
+Do not assume that the supplied repository snapshot or previous conversational reports represent the current working tree.
+
+### 2.2 Relevant approved decisions
+
+Pay particular attention to:
+
+- DEC-001 — Initial photometry and time-series capability.
+- DEC-002 — Initial application scope.
+- DEC-003 — Single-user local deployment and permission-aware project metadata.
+- DEC-005 — Initial BLS analytical operation.
+- DEC-006 — Approved technology stack.
+
+Also investigate the current documented position of **D6 — Data Storage Model**.
+
+The existing development records describe D6 as follows:
+
+- Permanent storage architecture is deferred.
+- A provisional local-file approach is permitted for the first working scientific vertical slice.
+- The data model should not be unnecessarily coupled to a particular permanent storage architecture.
+
+Verify the current authoritative records rather than assuming that this description has not changed.
+
+### 2.3 Foundation requirements
+
+Read:
+
+`docs/Foundation/0_index.md`
+
+Then consult the relevant section overviews and detailed documents.
+
+Prioritize:
+
+**Scientific capabilities**
+
+- Section 3.0 — Core Scientific Capabilities and Research Workflows.
+- Section 3.2 — Observational Data Examination and Preparation.
+- Section 3.4 — Photometry, Transits and Time-Series Analysis.
+
+**Scientific data and provenance**
+
+- Section 4.0 — Data Discovery, Databases and External Resources.
+- Section 4.4 — Scientific Data Types, Formats and Standards.
+- Section 4.5 — Data Retrieval, Import and Acquisition.
+- Section 4.6 — Data Lineage, Processing History and Traceability.
+- Section 4.7 — Data Provenance, Metadata and Source Attribution.
+- Section 4.8 — Data Quality, Reliability and Availability.
+
+**Scientific integrity**
+
+- Section 5.0 — Scientific Integrity, Automation and Analysis Control.
+- Section 5.1 — Scientific Integrity and Reliability.
+- Section 5.3 — Data Processing and Transformation Safeguards.
+- Section 5.4 — Scientific Interpretation and Uncertainty.
+- Section 5.6 — Validation, Error Detection and Quality Control.
+
+**Architecture and storage**
+
+- Section 9.0 — Platform, Architecture, Portability and Offline Use.
+- Section 9.2 — System Architecture and Technical Structure.
+- Section 9.4 — Data Storage and Management Infrastructure.
+- Section 9.7 — Portability, Interoperability and Data Ownership.
+
+**Development and approval**
+
+- Section 10.0 — AI Development Partner Responsibilities and Autonomy.
+- Section 10.4 — Technical and Architectural Decision-Making.
+- Section 10.6 — Testing, Verification and Quality Assurance.
+- Section 10.9 — User Oversight, Approval and Communication.
+- Section 11.0 — Knowledge Management, Project Records and Continuity.
+- Section 11.3 — Authoritative Records and Sources of Truth.
+- Section 11.5 — Documentation Maintenance and Change Management.
+- Section 12.0 — Initial Research Phase, Planning and Implementation Boundaries.
+- Section 12.6 — Development Planning and Implementation Readiness.
+- Section 12.7 — Transition from Research to Implementation.
+
+Consult additional detailed documents where the index or initial investigation identifies a relevant requirement.
+
+Foundation documents are authoritative and read-only.
+
+Cite the original relative document paths and relevant headings when relying on Foundation requirements.
+
+Do not modify Foundation documents.
 
 ---
 
@@ -88,21 +229,21 @@ Do not assume that every document listed above exists. Identify actual files and
 
 The initial target is the existing Kepler-10b FITS dataset.
 
-Local path:
+**Local path:**
 
 `C:\Code\AstronomyData\Kepler\Kepler-10b\kplr011904151-2009131105131_llc_full.fits`
 
-Filename:
+**Filename:**
 
 `kplr011904151-2009131105131_llc_full.fits`
 
-This file is outside the repository and is intended to remain outside the repository.
+The file is outside the repository and is intended to remain outside the repository.
 
 It must be treated as read-only.
 
 Do not move, rename, overwrite, modify, or delete it.
 
-Previously established information about this dataset includes:
+Previously established information includes:
 
 - FITS format.
 - Kepler long-cadence photometry.
@@ -110,37 +251,58 @@ Previously established information about this dataset includes:
 - Approximately 476 observation rows.
 - `TIME` values using the BKJD time reference and TDB time system.
 - `SAP_FLUX` and `PDCSAP_FLUX` measurement columns.
-- Corresponding flux uncertainty columns.
+- Corresponding uncertainty columns.
 - `SAP_QUALITY` quality flags.
 - `CADENCENO` cadence identifiers.
 - Approximately four missing flux measurements.
 - Approximately 37 observations with nonzero quality flags.
 
-These details are prior findings, not substitutes for inspection. Verify them against the actual local file.
+These are prior findings, not verified facts for this investigation.
 
-If the file cannot be accessed, report that limitation. Do not substitute synthetic data or another dataset.
+Verify them against the actual file.
+
+If the file cannot be accessed:
+
+- Report the limitation.
+- Identify which aspects of the investigation cannot be completed.
+- Do not substitute another dataset.
+- Do not use synthetic data as a replacement for actual dataset inspection.
+
+### Important distinction
+
+This task permits **read-only exploratory inspection** of the actual FITS file using Astropy.
+
+It does not authorize implementing a reusable FITS reader, importer, extraction workflow, or import interface.
+
+The distinction is:
+
+- 2.2.1: Inspect the file to understand the scientific structure and design the model.
+- 2.2.2: Implement the functionality that reads FITS files and extracts measurements into the approved model.
 
 ---
 
-## 4. Investigation A — FITS File Structure
+## 4. Investigation A — Actual FITS Structure
 
-Inspect the actual FITS file using Astropy.
+Inspect the actual Kepler-10b FITS file using Astropy.
 
 Determine and report:
 
-1. The number of HDUs.
-2. The purpose of each HDU.
+1. Number of HDUs.
+2. Purpose of each HDU.
 3. Which HDU contains the relevant light-curve measurements.
-4. The structure and names of the available table columns.
-5. The data types and shapes of the columns.
-6. Relevant FITS header metadata.
-7. Units associated with the measurements.
-8. Time reference, time system, and relevant timing metadata.
-9. Available uncertainty information.
-10. Available data-quality information.
-11. Missing, non-finite, or otherwise unusual values.
+4. Table structure and available columns.
+5. Column names, data types, dimensions, and shapes.
+6. Column units.
+7. Relevant primary and extension header metadata.
+8. Time reference and time system.
+9. Time units and relevant timing keywords.
+10. Available uncertainty information.
+11. Available data-quality information.
+12. Observation identifiers and cadence information.
+13. Missing, non-finite, or unusual values.
+14. Any relationships between columns that affect scientific interpretation.
 
-Pay particular attention to the relationship between:
+Pay particular attention to:
 
 - `TIME`
 - `SAP_FLUX`
@@ -150,219 +312,367 @@ Pay particular attention to the relationship between:
 - `SAP_QUALITY`
 - `CADENCENO`
 
-Do not assume all FITS files use this exact structure.
+Explain the distinction between the two flux measurement types.
 
-Identify which properties are specific to this Kepler dataset and which are general FITS or astronomical light-curve concepts.
+Do not treat `SAP_FLUX` and `PDCSAP_FLUX` as interchangeable.
 
-Do not perform scientific analysis or attempt to detect a transit during this task.
+Identify which properties are specific to the Kepler dataset and which represent more general astronomical light-curve concepts.
+
+Do not perform transit detection, BLS analysis, normalization, detrending, or other scientific processing.
+
+The objective is understanding the data, not interpreting its astronomical signals.
 
 ---
 
 ## 5. Investigation B — Proposed Light-Curve Data Model
 
-Examine the existing application architecture and propose how an imported light-curve dataset should be represented internally.
+Examine the existing application architecture and develop a concrete proposed internal data model.
 
-The proposal should address the following categories.
+The model should represent astronomical light-curve observations without unnecessarily depending on the structure of the initial Kepler file.
 
-### A. Source information
+Do not immediately jump to implementation.
 
-Determine how the application should represent:
+First establish what information the application needs to preserve and how the information relates to other parts of the application.
 
-- Original source-file path.
+### A. Dataset identity and source information
+
+Determine how the model should represent:
+
+- Dataset identity.
 - Original filename.
+- Original source-file path.
 - Source identifier, if available.
-- Source or archive information, if available.
+- Archive or originating resource.
+- Target object or observation identifier, where available.
+- Instrument and mission information.
 - Import date/time.
 - Relevant source metadata.
-- Whether the source file is currently accessible.
+- Source-file availability.
 
-Do not assume that a local file path alone constitutes complete scientific provenance.
+Consider whether a file checksum or another source-identification mechanism would provide useful provenance.
 
-### B. Measurement data
+Distinguish source-file identification from complete scientific provenance.
+
+Consider whether source-file availability should be stored as metadata or determined dynamically when needed.
+
+### B. Measurement representation
 
 Determine how the model should represent:
 
 - Observation timestamps.
 - Flux measurements.
 - Flux uncertainties.
-- Observation identifiers or cadence numbers.
+- Cadence numbers or other observation identifiers.
 - Data-quality flags.
-- Missing or invalid values.
-- The identity of the selected measurement column.
+- Missing measurements.
+- Invalid or non-finite values.
+- Measurement-column identities.
+- The selected measurement series for subsequent analysis.
 
-Consider whether multiple measurement columns should remain independently accessible.
+Consider whether measurements should be represented as:
 
-For example, `SAP_FLUX` and `PDCSAP_FLUX` should not be merged or treated as interchangeable.
+- Separate aligned arrays.
+- A structured measurement-series object.
+- A table-like representation.
+- Another justified structure.
 
-### C. Scientific metadata
+Evaluate the advantages and disadvantages of the alternatives against the existing application architecture and scientific requirements.
 
-Determine how the model should preserve:
+For the initial Kepler dataset, `SAP_FLUX` and `PDCSAP_FLUX` must remain independently identifiable and accessible.
 
-- Measurement units.
+Consider how the corresponding uncertainty columns should remain associated with their respective measurement columns.
+
+Do not assume that every astronomical dataset contains flux measurements or uses the same column names.
+
+### C. Time representation
+
+Give particular attention to time representation.
+
+The model must not reduce timestamps to generic floating-point values without preserving their interpretation.
+
+Determine how to represent:
+
+- Original timestamp values.
 - Time units.
 - Time reference or epoch.
 - Time system or scale.
-- Instrument or mission information, where available.
+- Relevant offsets and reference conventions.
+- Any additional timing metadata required to interpret observations correctly.
+
+Consider the distinction between:
+
+- A numerical time value.
+- The unit associated with that value.
+- Its reference epoch.
+- Its time scale.
+
+Investigate whether Astropy time-related structures are appropriate for the model or whether another representation is preferable.
+
+Consider the consequences for later BLS analysis and other time-series operations.
+
+Do not silently convert time values or assume a time convention when metadata is missing.
+
+### D. Scientific units and measurement metadata
+
+Determine how to represent:
+
+- Measurement units.
+- Uncertainty units.
+- Time units.
+- Original FITS column names.
+- Column descriptions.
+- Instrument and mission metadata.
 - Observation cadence.
-- Relevant FITS header information.
-- Original column names and their relationships.
+- Relevant header metadata.
+- Relationships between measurement and uncertainty columns.
 
-Do not silently assume units or time conventions when metadata is missing.
+Consider whether Astropy `Quantity` objects, unit strings, or another representation is appropriate.
 
-### D. Validation and warnings
+Evaluate the implications for:
 
-Determine how validation findings should be represented.
+- Serialization.
+- Future persistence.
+- Numerical computation.
+- Interoperability.
+- Unknown or missing units.
+
+Do not introduce assumptions about units that are not supported by the source data.
+
+### E. Validation and warnings
+
+Determine how the model should represent validation findings.
 
 Consider:
 
-- Missing required fields.
-- Missing optional fields.
-- Non-finite values.
+- Missing required information.
+- Missing optional information.
+- Non-finite measurements.
 - Invalid timestamps.
-- Missing uncertainty values.
+- Missing uncertainties.
 - Nonzero quality flags.
-- Unsupported or ambiguous metadata.
-- Unexpected column structures.
+- Unsupported metadata.
+- Ambiguous units or time conventions.
+- Unexpected measurement structures.
+- Inconsistent array lengths.
 
 Distinguish between:
 
-1. A condition that prevents importing a dataset.
-2. A condition that permits import but generates a warning.
-3. A condition that should be preserved as metadata without automatically changing the measurements.
+1. Conditions that should prevent a dataset from being accepted.
+2. Conditions that permit representation but generate warnings.
+3. Conditions that should be preserved without modifying the original measurements.
 
-Do not propose automatically discarding all observations with nonzero quality flags.
+Consider how validation findings should be structured so that later import functionality can report them consistently.
 
-### E. Original and derived data
+Distinguish model-level structural validation from FITS-file inspection and import validation.
 
-The model must conceptually distinguish:
+Do not design the model so that constructing it automatically removes observations or performs scientific processing.
 
-- Original source measurements.
-- Imported representations of those measurements.
-- Future derived or transformed measurements.
+In particular, nonzero quality flags must remain available.
 
-Normalization, filtering, detrending, quality filtering, and other processing operations must not silently overwrite original measurements.
+Do not assume all nonzero quality flags should cause observations to be discarded.
 
-Do not implement any processing functionality during this task.
+### F. Original and derived measurements
+
+Establish how the model should distinguish:
+
+1. Original source measurements.
+2. Imported representations of source measurements.
+3. Future derived or transformed measurements.
+
+Consider what relationships or metadata will eventually be required to trace derived measurements back to their source.
+
+Normalization, filtering, detrending, quality filtering, interpolation, and other processing operations must not silently overwrite original measurements.
+
+Do not implement processing functionality.
 
 ---
 
 ## 6. Investigation C — Existing Architecture and Integration
 
-Examine how the proposed data model would fit into the existing application.
+Inspect the actual application architecture.
+
+At minimum, examine:
+
+- `src/project_model.py`
+- `src/project_repository.py`
+- `src/project_service.py`
+- Existing UI modules relevant to project lifecycle.
+- Existing data-related modules.
+- Existing model and service tests.
+- Existing architecture and data-model documentation.
+
+Identify any existing dataset, file-reference, or project-association mechanisms.
 
 Determine:
 
 1. Which existing modules could reasonably own the scientific dataset model.
 2. Whether a new module is justified.
-3. How the dataset should relate to `ProjectMetadata`.
-4. Whether the current project model already provides a suitable relationship mechanism.
-5. Whether any existing functionality should be reused.
-6. Whether the proposed design creates unnecessary coupling between the UI, scientific data, and persistence layers.
+3. Whether separate structures are needed for dataset identity, measurements, metadata, and validation.
+4. How scientific datasets should relate to projects.
+5. Whether the current project model provides an appropriate relationship mechanism.
+6. Which existing interfaces should be reused.
+7. Whether the proposed model creates unnecessary coupling.
+8. Whether any existing architecture should be extended rather than replaced.
 
-Do not assume that the scientific dataset should be stored directly inside `ProjectMetadata`.
+### Important architectural boundaries
 
-The application should preserve the conceptual distinction between:
+Preserve the conceptual distinction between:
 
 - Project metadata.
 - Scientific datasets.
+- Measurement data.
 - Source-file references.
 - Scientific metadata.
+- Validation findings.
 - Future analysis results.
 
-The design should also leave room for later support of additional astronomical datasets and formats without attempting to implement them now.
+The project metadata model already has its own responsibilities, including the schema version 2 and DEC-003 ownership/roles fields.
+
+Do not propose placing large scientific measurement arrays directly into `ProjectMetadata` without a compelling architectural justification.
+
+Do not duplicate project ownership or permission metadata inside the scientific dataset model.
+
+The application remains a single-user local deployment under DEC-003.
+
+Do not introduce authentication, collaboration, or multi-user infrastructure.
+
+Explain how the proposed design fits the existing module-responsibility boundaries.
 
 ---
 
 ## 7. Investigation D — Storage and Persistence Boundaries
 
-Decision D6 deferred the permanent storage architecture.
+D6 deferred the permanent storage architecture.
 
-The current approved direction permits provisional local file persistence for the first working vertical slice, but does not establish a complete permanent storage architecture.
+The current approved direction permits provisional local-file persistence for the first scientific vertical slice without establishing a permanent storage architecture.
 
-For this task:
+For this task, determine:
 
-- Identify what the data model needs to represent independently of storage.
-- Identify which information must eventually survive project save and reopen.
-- Identify any storage-related requirements that the next task will need to address.
-- Explain the implications of referencing an external source file versus copying data into a project.
-- Identify limitations of relying on external file paths.
+1. What information the scientific data model needs to represent independently of storage.
+2. Which information must eventually survive project save and reopen.
+3. What the next task will need from the model to support provisional persistence.
+4. The implications of referencing an external source file.
+5. The implications of copying scientific data into a project.
+6. The risks of relying on external file paths.
+7. Whether the proposed data model can be serialized without losing scientific meaning.
+8. Which aspects of persistence should remain outside the model.
 
-Do not make a permanent storage architecture decision.
+Do not:
 
-Do not introduce a database, file-copying system, or new persistence mechanism as part of this planning task.
+- Make a permanent storage architecture decision.
+- Introduce a database.
+- Design a complete persistence subsystem.
+- Implement file copying.
+- Modify the existing project repository.
+- Expand the scope into project integration.
 
-If a decision requires formal approval, identify it explicitly rather than making it on the project's behalf.
+Identify any storage-related decision that requires further approval.
+
+The data model should remain appropriately independent of its eventual storage mechanism.
 
 ---
 
 ## 8. Investigation E — Future Compatibility
 
-The first implementation targets the selected Kepler FITS dataset.
+The initial implementation targets the selected Kepler FITS dataset.
 
-However, the longer-term project is intended to support additional astronomical research data.
+The general scientific data model should not become unnecessarily dependent on Kepler-specific assumptions.
 
-Consider whether the proposed model can reasonably accommodate future:
+Consider future compatibility with:
 
 - FITS light curves from other missions.
 - Different measurement columns.
 - Different time conventions.
-- Different flux or intensity units.
+- Different flux, intensity, or other measurement units.
 - Different uncertainty representations.
 - Different data-quality systems.
 - Additional photometric datasets.
+- Different observation cadences.
 
-The initial design should avoid unnecessary Kepler-specific assumptions in the general data model.
+Explain which elements should be generic and which can reasonably remain specific to the initial Kepler implementation.
 
-However, do not design an elaborate universal astronomy data framework or implement support for formats that are outside the current scope.
+Consider future compatibility with later visualization and BLS analysis.
 
-Explain which parts of the design should be general and which can remain specific to the initial Kepler importer.
+In particular, the model should preserve the information needed for subsequent time-series analysis without implementing those operations now.
+
+Avoid designing a universal astronomy data framework.
+
+The objective is an appropriately extensible first scientific data model, not an abstract framework for every possible astronomical observation.
 
 ---
 
 ## 9. Required Deliverable — Proposed Design
 
-Produce a structured planning report containing:
+Produce a structured planning report.
 
 ### 1. Repository and architecture findings
 
+Include:
+
+- Actual repository state.
 - Relevant files inspected.
+- Existing models and interfaces.
 - Existing functionality that can be reused.
-- Relevant existing interfaces and models.
+- Relevant architectural boundaries.
+- Existing documentation.
 - Missing or incomplete documentation.
-- Current test baseline, if verified.
+- Current Git working-tree state.
+- Verified test baseline, if established.
 
-### 2. FITS inspection results
+Distinguish current implementation from documented future requirements.
 
-- Actual HDU structure.
-- Relevant headers and metadata.
-- Column names, types, shapes, and units.
+### 2. Actual FITS inspection results
+
+Include:
+
+- HDU structure.
+- Relevant headers.
+- Column names.
+- Column data types and shapes.
+- Units.
 - Time conventions.
-- Missing or unusual data.
-- Any differences from previously established dataset information.
+- Uncertainty information.
+- Quality flags.
+- Missing or unusual measurements.
+- Differences from previously recorded dataset information.
+
+Identify which findings were directly verified against the actual file.
 
 ### 3. Proposed data model
 
-Provide a clear proposed model, including:
+Provide a concrete model proposal.
 
-- Suggested classes or structures.
+For each proposed class or structure, specify:
+
+- Name.
+- Responsibility.
 - Proposed fields.
-- Field types where appropriate.
-- Relationships between structures.
-- Required versus optional information.
-- How missing or unknown metadata should be represented.
+- Suggested field types.
+- Required versus optional fields.
+- Relationships with other structures.
+- Validation responsibilities.
+- Scientific purpose.
 
-Explain the purpose of each major part of the model.
+Explain how measurement columns and their uncertainties remain associated.
 
-If useful, provide a conceptual example or pseudocode. Do not provide implementation-ready code that implies authorization to modify the repository.
+Explain how timestamps and their interpretation are preserved.
 
-### 4. Validation design
+Include a conceptual example or pseudocode if useful.
+
+Do not provide implementation-ready code that implies authorization to modify the repository.
+
+### 4. Data integrity and validation design
 
 Explain:
 
-- Which conditions should prevent import.
-- Which conditions should generate warnings.
-- Which conditions should be preserved without automatically modifying data.
-- How the application should communicate validation results.
+- Required versus optional scientific information.
+- Model-level validation.
+- Import-level validation.
+- Errors versus warnings.
+- Missing and non-finite values.
+- Quality-flag preservation.
+- Original versus derived measurements.
+- Handling of unknown units and time conventions.
 
 ### 5. Architecture integration proposal
 
@@ -370,55 +680,97 @@ Identify:
 
 - Proposed module responsibilities.
 - Existing modules to reuse.
-- Any new modules that may be needed.
-- How the data model should relate to projects.
-- Dependencies or coupling concerns.
+- Any new modules that are justified.
+- Relationship between datasets and projects.
+- Separation between scientific data and project metadata.
+- Dependencies and coupling concerns.
+- Compatibility with the existing project lifecycle.
 
 ### 6. Storage implications
 
-Explain what the data model requires from future persistence, without selecting or implementing a permanent storage architecture.
+Explain what the proposed model requires from future persistence.
 
-### 7. Decisions requiring approval
+Remain within D6's approved boundaries.
 
-List any unresolved decisions that require my approval.
+Do not select or implement a permanent storage architecture.
 
-Separate:
+### 7. Future compatibility
 
-- Decisions already approved by existing documentation.
-- Recommendations that remain within existing authority.
-- New architectural or scientific decisions requiring approval.
+Explain how the proposed design accommodates future astronomical datasets without unnecessary abstraction.
 
-### 8. Proposed implementation breakdown
+Identify any Kepler-specific assumptions that should remain in the initial importer rather than the general model.
 
-Recommend the appropriate implementation boundaries for the next tasks:
+### 8. Decisions requiring approval
 
-- Subtask 2.2.2 — FITS import and validation.
-- Subtask 2.2.3 — Project integration and provisional persistence.
-- Subtask 2.2.4 — Testing, documentation, and completion verification.
+Separate findings into:
 
-Identify dependencies between them.
+- Existing approved decisions.
+- Recommendations within existing architectural authority.
+- New scientific or architectural decisions requiring my approval.
+- Questions that can safely remain deferred.
 
-Do not assume these boundaries are final if the investigation reveals a better division. Explain any proposed changes.
+Do not present recommendations as approved decisions.
 
-### 9. Testing strategy
+### 9. Proposed implementation breakdown
 
-Recommend tests for the proposed data model and FITS inspection/import interfaces.
+Review the proposed remaining Subtask 2.2 organization:
+
+| Subtask | Intended responsibility                             |
+| ------- | --------------------------------------------------- |
+| 2.2.2   | FITS import and validation                          |
+| 2.2.3   | Project integration and provisional persistence     |
+| 2.2.4   | Testing, documentation, and completion verification |
+
+Determine whether these boundaries remain appropriate after examining the actual architecture.
+
+Identify:
+
+- Dependencies.
+- Shared interfaces.
+- Potential overlap.
+- Any necessary changes to task boundaries.
+
+These are proposed boundaries, not immutable requirements.
+
+Explain any recommended changes.
+
+### 10. Testing strategy
+
+Recommend the tests required for the eventual data-model implementation.
 
 Distinguish between:
 
-- Unit tests.
-- FITS fixture tests.
-- Tests using the actual Kepler dataset.
+- Model construction and validation tests.
+- Serialization and conversion tests, if appropriate.
+- Controlled scientific-data fixtures.
+- Tests involving the actual Kepler dataset.
+- Future FITS importer tests.
 - Project integration tests.
-- Scientific metadata and integrity tests.
+
+Identify which tests belong specifically to 2.2.1 and which belong to subsequent subtasks.
+
+Do not introduce implementation work from later subtasks into the 2.2.1 scope.
 
 Do not weaken or replace existing tests.
 
-### 10. Documentation impact assessment
+### 11. Documentation impact assessment
 
-Identify which existing documentation will likely need updates during subsequent implementation.
+Identify which existing documents may require updates during implementation.
 
-Do not edit those documents now.
+Consider:
+
+- Data-model documentation.
+- Architecture documentation.
+- Module responsibilities.
+- Data-flow documentation.
+- Validation documentation.
+- Testing documentation.
+- Development log.
+- Master Development Roadmap.
+
+Identify documents that should remain unchanged.
+
+Do not edit any documentation during this Plan task.
 
 ---
 
@@ -426,40 +778,87 @@ Do not edit those documents now.
 
 This is strictly a PLAN task.
 
-**You may:**
+### Permitted
+
 - Read repository files.
 - Inspect the actual FITS dataset.
+- Use Astropy for read-only exploratory inspection.
 - Run read-only inspection commands.
-- Run existing tests only if needed to establish or verify the baseline.
-- Examine existing documentation and decisions.
-- Produce a design proposal and implementation recommendations.
+- Examine existing source code and tests.
+- Run existing tests if necessary to establish or verify the current baseline.
+- Consult Foundation documents.
+- Examine existing architectural decisions.
+- Produce a proposed design and implementation recommendations.
 
-**You may not:**
-- Create or modify source files.
+### Not permitted
+
+- Create, modify, delete, or overwrite source files.
 - Create or modify tests.
 - Modify documentation.
 - Modify Foundation documents.
+- Modify project configuration.
 - Install or upgrade dependencies.
-- Change project configuration.
-- Change the dataset.
-- Commit or push changes.
-- Begin implementation.
+- Modify the selected FITS dataset.
+- Introduce new dependencies.
+- Implement a FITS importer.
+- Implement project integration.
+- Implement scientific dataset persistence.
 - Make unapproved architectural or scientific decisions.
+- Commit or push changes.
 
-If a necessary investigation cannot be completed, clearly report the limitation rather than filling the gap with assumptions.
+Do not modify the existing PROMPTING.md file.
+
+Do not edit or rewrite its BUILD section.
+
+Do not create additional planning documents.
+
+If a necessary investigation cannot be completed, report the limitation instead of filling the gap with assumptions.
+
+If an architectural or scientific issue requires user approval, identify it clearly.
 
 ---
 
 ## 11. Final Instruction
 
-Finish by presenting the complete planning report.
+Complete the investigation and present the full structured planning report.
 
-Clearly distinguish verified findings, assumptions, recommendations, and unresolved decisions.
+Clearly distinguish:
+
+- Verified repository facts.
+- Verified FITS inspection findings.
+- Existing approved decisions.
+- Assumptions.
+- Recommendations.
+- Unresolved questions.
+- Decisions requiring my approval.
+
+The proposed design must be specific enough that it can be reviewed and, once approved, translated into a focused BUILD task.
+
+Do not implement anything.
 
 Do not begin Subtask 2.2.2.
 
-Stop and wait for review and explicit authorization before any Build-mode work.
+Do not proceed to another Stage 2.2 task.
 
+**Stop after presenting the complete planning report and wait for my review and explicit authorization before any BUILD-mode work.**
+
+## What I deliberately changed
+
+A few decisions in this revision are particularly important:
+
+1\. Time representation receives its own investigation. This is important because BKJD/TDB cannot safely be represented as an unexplained array of floating-point numbers. The model needs to preserve the interpretation of those values.
+
+2\. Measurement series are treated independently. SAP and PDCSAP measurements, including their respective uncertainties, must remain distinguishable.
+
+3\. Validation responsibilities are separated. The data model should be able to represent validation findings, but it should not become the FITS importer or perform import-time processing.
+
+4\. D6 remains protected. We can design a scientifically complete data structure without committing to a permanent database or storage architecture.
+
+5\. D4 is accounted for. The existing project metadata and permission model should remain separate from scientific dataset representation.
+
+6\. The actual repository takes precedence. The latest reported test baseline is 176 passing tests, but OpenCode must verify the current working tree and test results itself.
+
+Next action: Use this revised PLAN section with Nemotron/OpenCode. Once it produces its report, we can review the proposed classes, fields, relationships, and implementation boundaries before touching the BUILD prompt.
 
 
 # BUILD MODE PROMPT

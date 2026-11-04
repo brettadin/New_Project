@@ -9,6 +9,7 @@ Uses temporary directories only. Does not touch the real Kepler-10b dataset.
 
 from __future__ import annotations
 
+import json
 import uuid
 from unittest.mock import patch
 
@@ -34,10 +35,15 @@ def test_successful_project_creation(tmp_path):
 
     assert metadata.name == "My Research Project"
     assert metadata.status == "Active"
-    assert metadata.schema_version == 1
+    assert metadata.schema_version == 2
     assert metadata.external_data_references == []
+    assert metadata.owner == "local_user"
+    assert set(metadata.roles.keys()) == {"view", "contribute", "manage"}
+    for role in ("view", "contribute", "manage"):
+        assert metadata.roles[role] == ["local_user"]
     assert metadata.project_id
     uuid.UUID(metadata.project_id)
+    assert not metadata.is_dirty
 
 
 def test_project_metadata_initial_values(tmp_path):
@@ -50,8 +56,12 @@ def test_project_metadata_initial_values(tmp_path):
 
     assert metadata.name == "Initial Values"
     assert metadata.status == "Active"
-    assert metadata.schema_version == 1
+    assert metadata.schema_version == 2
     assert metadata.external_data_references == []
+    assert metadata.owner == "local_user"
+    assert set(metadata.roles.keys()) == {"view", "contribute", "manage"}
+    for role in ("view", "contribute", "manage"):
+        assert metadata.roles[role] == ["local_user"]
     assert metadata.created_at
     assert not metadata.is_dirty
 
@@ -228,3 +238,95 @@ def test_default_location_from_config_provider(tmp_path):
     metadata = service.create_project("Default Root Test")
     loaded = repo.load(metadata.project_id)
     assert loaded.name == "Default Root Test"
+
+
+# ------------------------------------------------------------------
+# Schema version 2: owner and roles persistence
+# ------------------------------------------------------------------
+
+
+def test_save_and_reload_preserves_owner_and_roles(tmp_path):
+    provider = ConfigProvider()
+    provider.set_projects_root(str(tmp_path))
+    repo = ProjectRepository(str(tmp_path))
+    service = ProjectService(provider, repo)
+
+    metadata = service.create_project("Owner Roles Test")
+
+    # Direct fixture assignment of valid non-default values.
+    metadata.owner = "researcher_a"
+    metadata.roles = {
+        "view": ["researcher_a", "researcher_b"],
+        "contribute": ["researcher_a"],
+        "manage": ["researcher_a"],
+    }
+
+    service.save_project()
+
+    reloaded = repo.load(metadata.project_id)
+    assert reloaded.owner == "researcher_a"
+    assert reloaded.roles["view"] == ["researcher_a", "researcher_b"]
+    assert reloaded.roles["contribute"] == ["researcher_a"]
+    assert reloaded.roles["manage"] == ["researcher_a"]
+    assert reloaded.schema_version == 2
+    assert not reloaded.is_dirty
+
+
+def test_legacy_v1_migration_save_and_reload_workflow(tmp_path):
+    """Complete legacy migration: in-memory only until explicit save."""
+    project_id = str(uuid.uuid4())
+    project_dir = tmp_path / project_id
+    project_dir.mkdir()
+
+    v1_metadata = {
+        "project_id": project_id,
+        "name": "Legacy Project",
+        "created_at": "2026-01-01T00:00:00+00:00",
+        "status": "Active",
+        "schema_version": 1,
+        "external_data_references": [],
+    }
+    project_file = project_dir / "project.json"
+    project_file.write_text(json.dumps(v1_metadata, indent=2), encoding="utf-8")
+
+    provider = ConfigProvider()
+    provider.set_projects_root(str(tmp_path))
+    repo = ProjectRepository(str(tmp_path))
+    service = ProjectService(provider, repo)
+
+    # Step 1 — Load through the existing service/repository path.
+    loaded = service.open_project(project_id, location=str(tmp_path))
+
+    # Step 2 — Verify in-memory migration.
+    assert loaded.schema_version == 2
+    assert loaded.owner == "local_user"
+    assert loaded.roles["view"] == ["local_user"]
+    assert loaded.roles["contribute"] == ["local_user"]
+    assert loaded.roles["manage"] == ["local_user"]
+    assert not loaded.is_dirty
+
+    # Step 3 — Verify no automatic disk migration before saving.
+    disk_data = json.loads(project_file.read_text(encoding="utf-8"))
+    assert disk_data["schema_version"] == 1
+    assert "owner" not in disk_data
+    assert "roles" not in disk_data
+
+    # Step 4 — Explicit save through the service.
+    service.save_project()
+
+    # Step 5 — Inspect persisted JSON.
+    persisted = json.loads(project_file.read_text(encoding="utf-8"))
+    assert persisted["schema_version"] == 2
+    assert persisted["owner"] == "local_user"
+    assert persisted["roles"]["view"] == ["local_user"]
+    assert persisted["roles"]["contribute"] == ["local_user"]
+    assert persisted["roles"]["manage"] == ["local_user"]
+
+    # Step 6 — Reload and verify migrated metadata is preserved and clean.
+    reloaded = service.open_project(project_id, location=str(tmp_path))
+    assert reloaded.schema_version == 2
+    assert reloaded.owner == "local_user"
+    assert reloaded.roles["view"] == ["local_user"]
+    assert reloaded.roles["contribute"] == ["local_user"]
+    assert reloaded.roles["manage"] == ["local_user"]
+    assert not reloaded.is_dirty

@@ -293,3 +293,62 @@ Chronological record of development activity. Maintained continuously as work pr
 - Or begin Subtask 2.2 — light-curve dataset import
 
 **Status:** Stage 2 In Progress; Task 2.1 subtasks 2.1.1–2.1.6 all complete.
+
+### 2026-11-04 — D4 / DEC-003 Permission-Aware Data Model (schema version 2)
+
+**Activity:** Implemented DEC-003 Option A — single-user local deployment with a permission-aware project metadata data model, and incremented the project metadata schema version from 1 to 2. Build mode, using the existing `.venv` (Python 3.13.9). No Foundation documents modified. No commits or pushes made. `src/project_service.py` and `src/project_repository.py` were not modified; the model's existing serialization interface is used for persistence.
+
+**Approved architecture implemented:** DEC-003 Option A. Single-user local deployment; projects private by default; local user implicitly owns every project; no accounts, authentication, groups, invitations, collaboration, or public sharing. Ownership and permission metadata are present as a future architectural extension point only; no multi-user infrastructure was built.
+
+**Files modified (4):**
+- `src/project_model.py` — `SCHEMA_VERSION` incremented 1 → 2. Added `owner: str = "local_user"` and `roles: dict[str, list[str]]` (default factory returns independent view/contribute/manage roles, each containing "local_user"). `ProjectMetadata.create()` initializes owner, roles, schema_version=2, is_dirty=False. Added `validate_owner()` and `validate_roles()` plus schema-version upper-bound (>2) rejection in `validate()`. `to_dict()` serializes owner and roles (roles copied to avoid sharing). `from_dict()` distinguishes v1 (in-memory migration to v2 with default owner/roles when absent, is_dirty=False, no disk modification) from v2 (owner and roles required; missing fields raise ProjectValidationError) and rejects versions > 2 and invalid schema-version types/values.
+- `tests/test_project_model.py` — Extended with tests for defaults (8.1), owner validation (8.2), roles validation (8.3), serialization round trips (8.4), v1 migration (8.5), v2 missing fields (8.6), future/invalid schema versions (8.7). Existing tests preserved.
+- `tests/test_project_service.py` — Updated two existing assertions from `schema_version == 1` to `schema_version == 2` to match the approved schema increment; added owner/roles/defaults assertions to creation tests. Added tests: save/reload preserves owner and roles (9.2), and the complete legacy v1 migration → explicit save → reload workflow in tmp_path (9.3), including verification that migration is in-memory only before save.
+- `docs/development/DEVELOPMENT_LOG.md` — This entry.
+
+**Dirty-state behavior (verified):** New metadata is clean; v1 migration is clean; v2 deserialization is clean. No automatic save during migration; legacy project JSON remains unchanged on disk until an explicit save. Explicit save persists v2 metadata and leaves the project clean.
+
+**Migration behavior (verified):** Loading a v1 project.json (no owner/roles, schema_version=1) upgrades in-memory schema_version to 2, applies default owner and roles, preserves existing fields, and is clean; the source file is untouched until `save_project()` is called, after which the file contains schema_version=2, owner="local_user", and all three default roles.
+
+**Validation behavior (verified):** Owner rejects empty/whitespace/None/int/list/dict. Roles rejects non-dict, missing view/contribute/manage, non-string role names, non-list values, non-string/empty/whitespace-only principal IDs; additional valid role names accepted. V2 missing owner or roles raises ProjectValidationError. Schema version > 2 and invalid types/values (float, bool, list, dict, 0, negative) raise ProjectValidationError.
+
+**Verified test results:**
+- `tests/test_project_model.py` — 51 tests, 0 failures (12 pre-existing preserved, 39 new).
+- `tests/test_project_service.py` — 12 tests, 0 failures (10 pre-existing with 2 assertions updated to schema_version==2, 2 new).
+- Full suite `python -m pytest` — 176 collected, 174 passed, 2 failed.
+
+**Full-suite failures (pre-existing tests, outside authorized scope):**
+- `tests/test_project_discovery.py::test_open_valid_project_from_default_root` — asserts `schema_version == 1`; now fails because `ProjectMetadata.create()` correctly produces schema version 2 per the approved architecture.
+- `tests/test_project_discovery.py::test_open_project_from_custom_location` — same cause, asserts `schema_version == 1`.
+These two tests encode the pre-change schema version and are in `tests/test_project_discovery.py`, which is outside the four authorized files. They need their assertion updated to `schema_version == 2` to align with DEC-003; that change is outside this task's authorized scope.
+
+**Limitations (deferred, not implemented):** The implementation remains strictly single-user and local. No ownership transfer, role assignment, authentication, user registration, groups, invitations, collaboration, public sharing, or multi-user authorization infrastructure exists. Multi-user functionality is deferred, not implemented.
+
+**Approved decisions preserved (not modified):** D1–D6 as recorded previously; D4 (single-user local, private-by-default, permission-aware) is the basis of this implementation.
+
+### 2026-11-04 — D4 Compatibility Cleanup: Project Discovery Tests
+
+**Activity:** Corrected two outdated schema-version expectations in `tests/test_project_discovery.py` following the completed D4 / DEC-003 implementation. Build mode, using the existing `.venv` (Python 3.13.9). No production code changed.
+
+**Relationship to D4 / DEC-003:** DEC-003 incremented the project metadata schema version from 1 to 2. Newly created projects now correctly produce `schema_version == 2`. Two discovery tests still asserted the obsolete value `schema_version == 1`, causing them to fail.
+
+**Files modified (2):**
+- `tests/test_project_discovery.py` — Updated two assertions:
+  - `test_open_valid_project_from_default_root` (line 204): `assert loaded.schema_version == 1` → `assert loaded.schema_version == 2`.
+  - `test_open_project_from_custom_location` (line 223): `assert loaded.schema_version == 1` → `assert loaded.schema_version == 2`.
+  All other assertions, setup, fixtures, and behavior preserved. No tests removed, weakened, skipped, or added. Legacy v1 migration behavior remains covered by the D4 model and service tests.
+- `docs/development/DEVELOPMENT_LOG.md` — This entry.
+
+**No production code changed:** `src/project_model.py`, `src/project_service.py`, and `src/project_repository.py` were untouched by this task. The original D4 implementation changes remain intact.
+
+**Verified test results:**
+- `tests/test_project_discovery.py` — all discovery tests pass.
+- `tests/test_project_model.py` — 51 tests, 0 failures (unchanged from D4).
+- `tests/test_project_service.py` — 12 tests, 0 failures (unchanged from D4).
+- Full suite `python -m pytest` — 176 collected, 176 passed, 0 failed.
+
+**Python and pytest versions:** Python 3.13.9 (`.venv`), pytest 9.2.0.
+
+**Git:** No commit or push was made. The pre-existing D4 modifications (`src/project_model.py`, `tests/test_project_model.py`, `tests/test_project_service.py`, `docs/development/DEVELOPMENT_LOG.md`) were preserved; only `tests/test_project_discovery.py` was added as an additional modified file by this task.
+
+**Limitations (unchanged, deferred):** The implementation remains strictly single-user and local. No multi-user functionality exists.

@@ -201,7 +201,7 @@ def test_open_valid_project_from_default_root(tmp_path):
     assert loaded.project_id == metadata.project_id
     assert loaded.name == "Open Test"
     assert loaded.status == "Active"
-    assert loaded.schema_version == 1
+    assert loaded.schema_version == 2
 
 
 def test_open_project_from_custom_location(tmp_path):
@@ -220,7 +220,7 @@ def test_open_project_from_custom_location(tmp_path):
     assert loaded.project_id == metadata.project_id
     assert loaded.name == "Custom Location Project"
     assert loaded.status == "Active"
-    assert loaded.schema_version == 1
+    assert loaded.schema_version == 2
 
 
 def test_opening_does_not_modify_project_json(tmp_path):
